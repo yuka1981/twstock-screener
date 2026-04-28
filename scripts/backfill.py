@@ -8,12 +8,13 @@ import argparse
 import logging
 import math
 import sys
-from datetime import date, datetime
+from datetime import date
 
 from twstock_screener.circuit_breaker import CircuitBreaker
 from twstock_screener.config import Settings
 from twstock_screener.db import finish_run, get_connection, init_db, start_run
 from twstock_screener.fetch import fetch_stock_history
+from twstock_screener.progress import ProgressReporter
 from twstock_screener.ratelimit import twse_bucket
 
 logging.basicConfig(
@@ -61,48 +62,40 @@ def main() -> int:
 
         success = 0
         failed = 0
-        started = datetime.now()
-        for i, sid in enumerate(ids, start=1):
-            if breaker.is_open():
-                logger.error(
-                    "circuit breaker open after %d consecutive failures, abort",
-                    breaker.consecutive_failures,
+        progress = ProgressReporter(total=len(ids), label="backfill", log_every=50)
+        try:
+            for i, sid in enumerate(ids, start=1):
+                if breaker.is_open():
+                    logger.error(
+                        "circuit breaker open after %d consecutive failures, abort",
+                        breaker.consecutive_failures,
+                    )
+                    finish_run(
+                        settings.db_path,
+                        run_id,
+                        "failed",
+                        stocks_processed=success,
+                        stocks_failed=failed,
+                        error="circuit breaker tripped",
+                    )
+                    return 2
+                result = fetch_stock_history(
+                    settings.db_path, sid, months=months, bucket=twse_bucket
                 )
-                finish_run(
-                    settings.db_path,
-                    run_id,
-                    "failed",
-                    stocks_processed=success,
-                    stocks_failed=failed,
-                    error="circuit breaker tripped",
-                )
-                return 2
-            result = fetch_stock_history(
-                settings.db_path, sid, months=months, bucket=twse_bucket
-            )
-            if result.success:
-                success += 1
-                breaker.record_success()
-            else:
-                failed += 1
-                breaker.record_failure()
-                logger.warning(
-                    "[%d/%d] %s FAIL: %s", i, len(ids), sid, result.error
-                )
-                continue
-            if i % 50 == 0:
-                elapsed = (datetime.now() - started).total_seconds()
-                rate = i / max(1.0, elapsed)
-                eta = (len(ids) - i) / max(rate, 1e-6)
-                logger.info(
-                    "[%d/%d] success=%d fail=%d rate=%.2f/s eta=%.0fs",
-                    i,
-                    len(ids),
-                    success,
-                    failed,
-                    rate,
-                    eta,
-                )
+                if result.success:
+                    success += 1
+                    breaker.record_success()
+                    suffix = f"{sid} ok rows={result.rows_inserted}"
+                else:
+                    failed += 1
+                    breaker.record_failure()
+                    suffix = f"{sid} FAIL: {result.error}"
+                    logger.warning(
+                        "[%d/%d] %s FAIL: %s", i, len(ids), sid, result.error
+                    )
+                progress.update(suffix=suffix)
+        finally:
+            progress.close()
         logger.info("done. success=%d fail=%d", success, failed)
         ok = failed < len(ids) * 0.05
         finish_run(
