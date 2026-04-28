@@ -5,5 +5,10 @@ data/twstock.db-shm
 .venv/
 __pycache__/
 *.pyc
-logs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+logs/*.log
 12pOQ8zoxM0VAwgWnPwpCTUL8X2GiLYur
