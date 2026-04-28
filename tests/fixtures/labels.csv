@@ -1,0 +1,71 @@
+stock_id,pattern,anchor_date,note
+2330,m_top,2024-07-12,double top before AI peak correction
+2454,m_top,2023-10-05,top before late-2023 semi pullback
+1303,m_top,2024-03-22,plastics top
+2412,m_top,2023-06-15,telco range top
+1102,m_top,2024-09-30,cement top
+2002,m_top,2024-01-18,steel top
+2603,m_top,2024-11-05,shipping top
+2880,m_top,2025-02-14,bank top
+2891,m_top,2024-04-26,bank top before correction
+1216,m_top,2025-08-11,food top
+2330,w_bottom,2022-10-26,inventory cycle bottom
+2317,w_bottom,2023-01-09,Hon Hai Q1 recovery bottom
+2454,w_bottom,2022-11-23,MediaTek bottom
+1303,w_bottom,2023-03-08,plastics bottom
+2412,w_bottom,2022-07-15,telco bottom
+2308,w_bottom,2023-05-02,Delta bottom
+2882,w_bottom,2022-10-14,Cathay bottom
+2884,w_bottom,2023-04-12,E.Sun bottom
+2891,w_bottom,2022-12-20,CTBC bottom
+2207,w_bottom,2024-08-07,Hotai bottom
+2330,descending_flag,2022-09-20,Fed hike pullback flag
+2454,descending_flag,2022-08-15,MediaTek mid-decline flag
+2317,descending_flag,2022-04-25,Hon Hai war shock pullback
+2308,descending_flag,2022-09-30,Delta pullback
+2382,descending_flag,2024-08-12,Quanta AI correction flag
+3008,descending_flag,2022-06-22,Largan pullback
+1303,descending_flag,2022-10-12,Nan Ya pullback
+2603,descending_flag,2022-07-08,Evergreen post-bubble flag
+6505,descending_flag,2022-09-15,FPCC pullback
+2303,descending_flag,2022-11-03,UMC pullback
+2330,ascending_flag,2023-04-25,TSMC recovery rally flag
+2454,ascending_flag,2023-06-15,MediaTek rally flag
+2317,ascending_flag,2024-03-04,Hon Hai AI server rally
+2382,ascending_flag,2024-02-08,Quanta AI rally
+3017,ascending_flag,2024-01-22,Asia Vital rally
+2376,ascending_flag,2024-04-09,Gigabyte rally
+6669,ascending_flag,2024-03-18,Wiwynn rally
+8069,ascending_flag,2024-05-07,E-Ink rally
+4961,ascending_flag,2024-05-22,Tianyu rally
+2059,ascending_flag,2024-06-12,King Slide rally
+2330,diamond_top,2024-07-12,TSMC AI top diamond
+2454,diamond_top,2024-07-08,MediaTek top diamond
+3008,diamond_top,2024-08-15,Largan top diamond
+2382,diamond_top,2024-08-19,Quanta top diamond
+2376,diamond_top,2024-08-22,Gigabyte top diamond
+4961,diamond_top,2024-08-26,Tianyu top diamond
+6669,diamond_top,2024-09-03,Wiwynn top diamond
+3017,diamond_top,2024-09-10,Asia Vital top diamond
+8069,diamond_top,2024-09-17,E-Ink top diamond
+2376,diamond_top,2025-01-15,Gigabyte secondary top
+2330,ascending_wedge,2024-06-18,TSMC peak wedge
+2317,ascending_wedge,2024-06-07,Hon Hai wedge
+2382,ascending_wedge,2024-07-01,Quanta wedge
+2376,ascending_wedge,2024-06-25,Gigabyte wedge
+6669,ascending_wedge,2024-06-28,Wiwynn wedge
+4961,ascending_wedge,2024-07-05,Tianyu wedge
+3017,ascending_wedge,2024-07-02,Asia Vital wedge
+8069,ascending_wedge,2024-07-15,E-Ink wedge
+2454,ascending_wedge,2024-06-20,MediaTek wedge
+3008,ascending_wedge,2024-07-08,Largan wedge
+2412,rectangle,2023-09-15,telco consolidation box
+1101,rectangle,2023-08-10,Taiwan Cement box
+2880,rectangle,2024-02-15,Hua Nan FH sideways
+2884,rectangle,2023-11-20,E.Sun FH sideways
+2891,rectangle,2024-01-10,CTBC sideways
+2882,rectangle,2024-03-12,Cathay FH sideways
+2885,rectangle,2024-02-08,Yuanta FH sideways
+2886,rectangle,2024-03-25,Mega FH sideways
+5880,rectangle,2024-04-15,Taiwan Coop FH sideways
+2603,rectangle,2023-05-10,Evergreen sideways
