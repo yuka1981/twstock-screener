@@ -1061,8 +1061,7 @@ Expected: ImportError.
 ```python
 # src/twstock_screener/holidays.py
 import logging
-import sqlite3
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -2915,38 +2914,85 @@ Each pattern needs ≥ 10 manually-labeled real historical instances. Total 70.
 - Create: `tests/fixtures/labels.csv`
 - Create: `tests/test_labeled_benchmark.py`
 
-- [ ] **Step 1: Define label schema and seed file**
+- [ ] **Step 1: Seed labels.csv with all 70 rows**
 
-Write `tests/fixtures/labels.csv` (manual content — fill rows during this step):
+Write `tests/fixtures/labels.csv` with all 70 cases below. Anchor dates are **best-effort approximations** — the engineer MUST verify each against Goodinfo / TradingView before running the benchmark. Update inaccurate rows in place; the test below enforces ≥ 70% recall and will surface bad labels as failures.
 
 ```csv
 stock_id,pattern,anchor_date,note
-2330,m_top,2024-07-12,clear double top with neckline break
-2454,m_top,2023-10-05,M-top before semi correction
-1303,m_top,2024-03-22,
-2412,m_top,2023-06-15,
-1102,m_top,2024-09-30,
-2002,m_top,2024-01-18,
-2603,m_top,2024-11-05,
-2880,m_top,2025-02-14,
-2891,m_top,2024-04-26,
-1216,m_top,2025-08-11,
-2330,w_bottom,2022-10-26,COVID/inventory bottom
-2317,w_bottom,2023-01-09,
-2454,w_bottom,2022-11-23,
-1303,w_bottom,2023-03-08,
-2412,w_bottom,2022-07-15,
-2308,w_bottom,2023-05-02,
-2882,w_bottom,2022-10-14,
-2884,w_bottom,2023-04-12,
-2891,w_bottom,2022-12-20,
-2207,w_bottom,2024-08-07,
-# 50 more rows: 10 each for descending_flag, ascending_flag, diamond_top, ascending_wedge, rectangle.
-# Identify via TWSE chart history (Goodinfo / TradingView). Fill stock_id, anchor_date.
-# Keep note column for self-reference. Anchor_date = the day pattern is confirmed/triggered.
+2330,m_top,2024-07-12,double top before AI peak correction
+2454,m_top,2023-10-05,top before late-2023 semi pullback
+1303,m_top,2024-03-22,plastics top
+2412,m_top,2023-06-15,telco range top
+1102,m_top,2024-09-30,cement top
+2002,m_top,2024-01-18,steel top
+2603,m_top,2024-11-05,shipping top
+2880,m_top,2025-02-14,bank top
+2891,m_top,2024-04-26,bank top before correction
+1216,m_top,2025-08-11,food top
+2330,w_bottom,2022-10-26,inventory cycle bottom
+2317,w_bottom,2023-01-09,Hon Hai Q1 recovery bottom
+2454,w_bottom,2022-11-23,MediaTek bottom
+1303,w_bottom,2023-03-08,plastics bottom
+2412,w_bottom,2022-07-15,telco bottom
+2308,w_bottom,2023-05-02,Delta bottom
+2882,w_bottom,2022-10-14,Cathay bottom
+2884,w_bottom,2023-04-12,E.Sun bottom
+2891,w_bottom,2022-12-20,CTBC bottom
+2207,w_bottom,2024-08-07,Hotai bottom
+2330,descending_flag,2022-09-20,Fed hike pullback flag
+2454,descending_flag,2022-08-15,MediaTek mid-decline flag
+2317,descending_flag,2022-04-25,Hon Hai war shock pullback
+2308,descending_flag,2022-09-30,Delta pullback
+2382,descending_flag,2024-08-12,Quanta AI correction flag
+3008,descending_flag,2022-06-22,Largan pullback
+1303,descending_flag,2022-10-12,Nan Ya pullback
+2603,descending_flag,2022-07-08,Evergreen post-bubble flag
+6505,descending_flag,2022-09-15,FPCC pullback
+2303,descending_flag,2022-11-03,UMC pullback
+2330,ascending_flag,2023-04-25,TSMC recovery rally flag
+2454,ascending_flag,2023-06-15,MediaTek rally flag
+2317,ascending_flag,2024-03-04,Hon Hai AI server rally
+2382,ascending_flag,2024-02-08,Quanta AI rally
+3017,ascending_flag,2024-01-22,Asia Vital rally
+2376,ascending_flag,2024-04-09,Gigabyte rally
+6669,ascending_flag,2024-03-18,Wiwynn rally
+8069,ascending_flag,2024-05-07,E-Ink rally
+4961,ascending_flag,2024-05-22,Tianyu rally
+2059,ascending_flag,2024-06-12,King Slide rally
+2330,diamond_top,2024-07-12,TSMC AI top diamond
+2454,diamond_top,2024-07-08,MediaTek top diamond
+3008,diamond_top,2024-08-15,Largan top diamond
+2382,diamond_top,2024-08-19,Quanta top diamond
+2376,diamond_top,2024-08-22,Gigabyte top diamond
+4961,diamond_top,2024-08-26,Tianyu top diamond
+6669,diamond_top,2024-09-03,Wiwynn top diamond
+3017,diamond_top,2024-09-10,Asia Vital top diamond
+8069,diamond_top,2024-09-17,E-Ink top diamond
+2376,diamond_top,2025-01-15,Gigabyte secondary top
+2330,ascending_wedge,2024-06-18,TSMC peak wedge
+2317,ascending_wedge,2024-06-07,Hon Hai wedge
+2382,ascending_wedge,2024-07-01,Quanta wedge
+2376,ascending_wedge,2024-06-25,Gigabyte wedge
+6669,ascending_wedge,2024-06-28,Wiwynn wedge
+4961,ascending_wedge,2024-07-05,Tianyu wedge
+3017,ascending_wedge,2024-07-02,Asia Vital wedge
+8069,ascending_wedge,2024-07-15,E-Ink wedge
+2454,ascending_wedge,2024-06-20,MediaTek wedge
+3008,ascending_wedge,2024-07-08,Largan wedge
+2412,rectangle,2023-09-15,telco consolidation box
+1101,rectangle,2023-08-10,Taiwan Cement box
+2880,rectangle,2024-02-15,Hua Nan FH sideways
+2884,rectangle,2023-11-20,E.Sun FH sideways
+2891,rectangle,2024-01-10,CTBC sideways
+2882,rectangle,2024-03-12,Cathay FH sideways
+2885,rectangle,2024-02-08,Yuanta FH sideways
+2886,rectangle,2024-03-25,Mega FH sideways
+5880,rectangle,2024-04-15,Taiwan Coop FH sideways
+2603,rectangle,2023-05-10,Evergreen sideways
 ```
 
-This step is **human work**. Use TWSE chart history (Goodinfo, TradingView) and fill all 70 rows. The remaining patterns and stock candidates: descending_flag (typical mid-trend pullbacks during 2022-2025 corrections), ascending_flag (rallies in recovery quarters), diamond_top (rare; look at semiconductor peaks 2024-2025), ascending_wedge (visible in TSMC 2024-2025), rectangle (sideways consolidations in financials Q1 2023, Q3 2024).
+This file IS the deliverable. **Do not run the test until every row has been verified against the actual chart**. Use Goodinfo (`https://goodinfo.tw/tw/StockInfo/StockDetail.asp?STOCK_ID={id}`) or TradingView to verify each anchor_date matches a real instance of the labeled pattern; correct any mis-identified rows in place.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -2993,8 +3039,11 @@ def _load_labels() -> dict[str, list[tuple[str, date]]]:
 @pytest.mark.parametrize("detector", ALL_DETECTORS, ids=lambda d: d.pattern_id)
 def test_detector_hits_70_percent_of_labeled(detector):
     cases = _load_labels().get(detector.pattern_id, [])
-    if len(cases) < MIN_CASES:
-        pytest.skip(f"need >= {MIN_CASES} labeled cases for {detector.pattern_id}, have {len(cases)}")
+    # Spec §9.2 mandates >= 10 cases per detector. Failing instead of skipping
+    # is intentional: we never want a silent green test from missing labels.
+    assert len(cases) >= MIN_CASES, (
+        f"need >= {MIN_CASES} labeled cases for {detector.pattern_id}, have {len(cases)}"
+    )
     settings = Settings()  # type: ignore[call-arg]
     con = get_connection(settings.db_path)
     hits = 0
@@ -3160,7 +3209,6 @@ Expected: ImportError.
 ```python
 # src/twstock_screener/fetch.py
 import logging
-import sqlite3
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -3390,10 +3438,7 @@ import argparse
 import logging
 import math
 import sys
-import time
-from datetime import datetime
-
-from datetime import date as date_cls
+from datetime import date, datetime
 
 from twstock_screener.circuit_breaker import CircuitBreaker
 from twstock_screener.config import Settings
@@ -3418,7 +3463,7 @@ def main() -> int:
     months = max(1, math.ceil(args.days / 20))
     breaker = CircuitBreaker(threshold=50, cooldown_seconds=1800)
 
-    run_id = start_run(settings.db_path, date_cls.today(), "fetch")
+    run_id = start_run(settings.db_path, date.today(), "fetch")
     try:
         con = get_connection(settings.db_path)
         if args.stocks:
@@ -3666,9 +3711,7 @@ from pathlib import Path
 import pandas as pd
 
 from twstock_screener.db import get_connection
-from twstock_screener.detectors import (
-    ALL_DETECTORS, BOX_PATTERNS, BUY_PATTERNS, SELL_PATTERNS,
-)
+from twstock_screener.detectors import ALL_DETECTORS, BUY_PATTERNS, SELL_PATTERNS
 from twstock_screener.score import composite_score
 
 logger = logging.getLogger(__name__)
@@ -3749,7 +3792,7 @@ def walk_forward_emitted(
     # Per-stock-per-pattern FSM state (keyed by tuple).
     state_active: dict[tuple[str, str], date] = {}
     state_history: dict[tuple[str, str], list[date]] = {}
-    invalidate_age = pd.Timedelta(days=30)
+    EXPIRY_DAYS = 30
 
     counts: dict[str, dict[str, int]] = {
         d.pattern_id: {"signals": 0, "correct": 0, "incorrect": 0, "inconclusive": 0}
@@ -3812,11 +3855,10 @@ def walk_forward_emitted(
             else:
                 counts[pat]["inconclusive"] += 1
 
-        # Expire alerts older than 30 days.
-        expired = [k for k, fs in state_active.items() if d_at - fs >= invalidate_age.days * pd.Timedelta(days=1).days * 0]  # placeholder; keep simple: integer day diff
+        # Expire alerts older than EXPIRY_DAYS.
         expired = [
             k for k, fs in state_active.items()
-            if (d_at - fs).days >= 30
+            if (d_at - fs).days >= EXPIRY_DAYS
         ]
         for k in expired:
             state_history.setdefault(k, []).append(state_active.pop(k))
@@ -4047,7 +4089,6 @@ from twstock_screener.notify import send_alert
 from twstock_screener.score import composite_score
 from twstock_screener.state_machine import (
     Transition, apply_detection, apply_expiry, apply_invalidation,
-    get_active_alert, get_history,
 )
 
 
@@ -4120,6 +4161,14 @@ def _max_data_date(db_path: Path) -> date | None:
 
 
 def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
+    """Run daily analysis.
+
+    dry_run=True is FULLY READ-ONLY: no writes to alert_state_current,
+    alert_history, or notification_log. Logs the batch message that would be
+    sent and an estimate of transition counts WITHOUT consuming the
+    NEW_ACTIVE/REACTIVATED transitions, so 5 days of dry-run cannot poison
+    live activation state.
+    """
     data_date = _max_data_date(settings.db_path)
     if data_date is None:
         logger.error("no OHLC data; abort")
@@ -4131,11 +4180,12 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     # Phase 1: detect — collect raw matches that pass score_threshold_active.
     raw_candidates: list[Candidate] = []
     stocks = _list_active_stocks(settings.db_path)
-    logger.info("analyzing %d stocks (data through %s)", len(stocks), data_date)
+    logger.info("analyzing %d stocks (data through %s) dry_run=%s",
+                len(stocks), data_date, dry_run)
 
-    detected_keys: set[tuple[str, str]] = set()  # (stock_id, pattern) seen this run
-    weak_keys: set[tuple[str, str]] = set()      # detected but composite < threshold_invalidate
-    stock_data: dict[str, tuple[pd.DataFrame, float, float, str]] = {}  # cache
+    detected_keys: set[tuple[str, str]] = set()
+    weak_keys: set[tuple[str, str]] = set()
+    stock_data: dict[str, tuple[pd.DataFrame, float, float, str]] = {}
 
     for sid, name in stocks:
         df = _load_recent_ohlc(settings.db_path, sid, days=90)
@@ -4159,10 +4209,10 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
                 stock_id=sid, name=name, pattern=det.pattern_id,
                 fit_score=r.fit_score, composite=comp,
                 close=last_close, avg_volume_20d=avg_vol,
-                transition=Transition.NOOP,  # filled in Phase 3
+                transition=Transition.NOOP,
             ))
 
-    # Phase 2: buy/sell collision filter — drop conflicted stocks BEFORE FSM persistence.
+    # Phase 2: buy/sell collision filter (in-memory, no DB write either way).
     by_stock: dict[str, set[str]] = {}
     for c in raw_candidates:
         by_stock.setdefault(c.stock_id, set()).add(c.pattern)
@@ -4170,45 +4220,38 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
                   if pats & SELL_PATTERNS and pats & BUY_PATTERNS}
     candidates = [c for c in raw_candidates if c.stock_id not in conflicted]
 
-    # Phase 3: apply detection FSM only to survivors.
-    for c in candidates:
-        c.transition = apply_detection(
-            settings.db_path, c.stock_id, c.pattern,
-            score=c.composite, today=today,
-        )
-
-    # Phase 4: invalidate — only if detector still produced a result this run with
-    # composite < score_threshold_invalidate. Pure no-match leaves alert alone (expiry
-    # handles stale ones). v2 will add per-pattern explicit break conditions per spec §4.3.
-    invalidations: list[tuple[str, str, str]] = []  # (stock_id, pattern, name)
+    # Phase 3: predict transitions WITHOUT writing in dry-run mode.
+    invalidations: list[tuple[str, str, str]] = []
     con = get_connection(settings.db_path)
     try:
         active_rows = list(con.execute(
             "SELECT stock_id, pattern, first_seen FROM alert_state_current"
         ))
+        history_pairs = {
+            (r["stock_id"], r["pattern"]) for r in con.execute(
+                "SELECT DISTINCT stock_id, pattern FROM alert_history"
+            )
+        }
     finally:
         con.close()
+    active_pairs = {(r["stock_id"], r["pattern"]) for r in active_rows}
+
+    for c in candidates:
+        key = (c.stock_id, c.pattern)
+        if key in active_pairs:
+            c.transition = Transition.REFRESHED
+        elif key in history_pairs:
+            c.transition = Transition.REACTIVATED
+        else:
+            c.transition = Transition.NEW_ACTIVE
+
     for row in active_rows:
         sid, pattern = row["stock_id"], row["pattern"]
         if (sid, pattern) in weak_keys:
-            apply_invalidation(settings.db_path, sid, pattern, today=today)
             display_name = stock_data[sid][3] if sid in stock_data else sid
             invalidations.append((sid, pattern, display_name))
 
-    # Phase 5: expire alerts older than max_alert_age_days (no notification per spec).
-    cutoff = today - timedelta(days=settings.max_alert_age_days)
-    con = get_connection(settings.db_path)
-    try:
-        old = list(con.execute(
-            "SELECT stock_id, pattern FROM alert_state_current WHERE first_seen <= ?",
-            (cutoff.isoformat(),),
-        ))
-    finally:
-        con.close()
-    for r in old:
-        apply_expiry(settings.db_path, r["stock_id"], r["pattern"], today=today)
-
-    # Phase 6: rank and build top-N lists.
+    # Phase 4: rank and build top-N lists.
     sells = sorted(
         [c for c in candidates if c.pattern in SELL_PATTERNS],
         key=lambda x: (-x.composite, -x.close * x.avg_volume_20d, x.stock_id),
@@ -4228,9 +4271,41 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     logger.info("batch summary:\n%s", batch_msg)
 
     if dry_run:
-        logger.info("dry-run: would send batch (transitions=%d) and %d invalidations",
-                    len(pushable), len(invalidations))
+        logger.info(
+            "dry-run: NO state writes. predicted transitions=%d invalidations=%d",
+            len(pushable), len(invalidations),
+        )
         return 0
+
+    # Phase 5 (live only): persist FSM transitions, then invalidations, then expiry.
+    for c in candidates:
+        c.transition = apply_detection(
+            settings.db_path, c.stock_id, c.pattern,
+            score=c.composite, today=today,
+        )
+    for sid, pattern, _name in invalidations:
+        apply_invalidation(settings.db_path, sid, pattern, today=today)
+
+    cutoff = today - timedelta(days=settings.max_alert_age_days)
+    con = get_connection(settings.db_path)
+    try:
+        old = list(con.execute(
+            "SELECT stock_id, pattern FROM alert_state_current WHERE first_seen <= ?",
+            (cutoff.isoformat(),),
+        ))
+    finally:
+        con.close()
+    for r in old:
+        apply_expiry(settings.db_path, r["stock_id"], r["pattern"], today=today)
+
+    # Refresh the rank lists' transition fields with the persisted result so the
+    # downstream send loop sees authoritative values.
+    persisted = {(c.stock_id, c.pattern): c.transition for c in candidates}
+    for c in (sells + buys + boxes):
+        if (c.stock_id, c.pattern) in persisted:
+            c.transition = persisted[(c.stock_id, c.pattern)]
+    pushable = [c for c in (sells + buys + boxes)
+                if c.transition in (Transition.NEW_ACTIVE, Transition.REACTIVATED)]
 
     chat_id = settings.telegram_chat_id
     token = settings.telegram_bot_token.get_secret_value()
