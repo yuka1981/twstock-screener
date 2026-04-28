@@ -1,0 +1,9 @@
+data/twstock.db
+data/twstock.db-wal
+data/twstock.db-shm
+.env
+.venv/
+__pycache__/
+*.pyc
+logs/
+12pOQ8zoxM0VAwgWnPwpCTUL8X2GiLYur
