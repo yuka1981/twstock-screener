@@ -3048,16 +3048,19 @@ def test_detector_hits_70_percent_of_labeled(detector):
     con = get_connection(settings.db_path)
     hits = 0
     for sid, anchor in cases:
+        # Load through anchor + 10 calendar days so the ±5 trading-day window
+        # for confirmation has data on both sides of the labeled date.
+        upper = (anchor + timedelta(days=10)).isoformat()
         rows = con.execute(
             "SELECT date, open, high, low, close, volume FROM ohlc "
             "WHERE stock_id=? AND date <= ? ORDER BY date",
-            (sid, anchor.isoformat()),
+            (sid, upper),
         ).fetchall()
         if len(rows) < detector.lookback_days:
             continue
         df = pd.DataFrame([dict(r) for r in rows])
         df["date"] = pd.to_datetime(df["date"])
-        # Allow a ±5 trading day window around anchor for detector confirmation.
+        # Allow a ±5 calendar-day window around anchor for detector confirmation.
         for offset in range(-5, 6):
             sub = df[df["date"] <= pd.Timestamp(anchor + timedelta(days=offset))]
             if len(sub) < detector.lookback_days:
@@ -3092,14 +3095,14 @@ git commit -m "test: add 70-case labeled detector benchmark with 70% recall gate
 
 ---
 
-### Task P0.18: Phase P0 final gate — full test suite green
+### Task P0.18: Phase P0 final gate — fast test suite green
 
-- [ ] **Step 1: Run full suite**
+- [ ] **Step 1: Run fast suite (excludes slow markers — labeled benchmark needs P2 backfill data)**
 
 ```bash
-uv run pytest -v --tb=short
+uv run pytest -v --tb=short -m "not slow"
 ```
-Expected: all passing (47+ tests). If any fails, fix before proceeding.
+Expected: all passing (47+ tests). If any fails, fix before proceeding. The labeled benchmark (P0.17) is gated separately at the end of P2 — see Task P2.2 below.
 
 - [ ] **Step 2: Run lint + type check**
 
@@ -3583,12 +3586,26 @@ uv run sqlite3 data/twstock.db "SELECT COUNT(*) FROM stocks WHERE market='TWSE' 
 ```
 Expected: > 900. If stale (> 30 days), re-run `scripts/refresh_metadata.py` first.
 
-- [ ] **Step 2: Launch 5-year backfill in background**
+- [ ] **Step 2: Launch backfill in background**
 
-Wall-clock estimate: 1000 stocks × 60 months @ 0.6 calls/s ≈ 28 hours. Run over a weekend; resumable if interrupted.
+Required coverage: walk-forward backtest needs `start=2020-01-01`. As of today 2026-04-28 that is ~75 months back, plus a 3-month pre-window so the first detector has its 60-bar lookback when evaluating Jan-2020 signals. Total: 78 months ≈ **1600 trading days** (`--days 1600`).
+
+The fetch helper walks backward by `ceil(days / 20)` months from `date.today()`. Confirm before running:
 
 ```bash
-nohup uv run python scripts/backfill.py --days 1300 > logs/backfill.log 2>&1 &
+uv run python -c "
+import math
+from datetime import date
+months = math.ceil(1600 / 20)
+print(f'months={months}, oldest_target = {date.today().year}-{date.today().month:02d} minus {months} months')
+"
+```
+Expected: `months=80, oldest_target = ~2019-08`.
+
+Wall-clock estimate: 1000 stocks × 80 months @ 0.6 calls/s ≈ 37 hours. Run over a long weekend; resumable if interrupted.
+
+```bash
+nohup uv run python scripts/backfill.py --days 1600 > logs/backfill.log 2>&1 &
 echo $! > logs/backfill.pid
 ```
 
@@ -3615,7 +3632,14 @@ SELECT COUNT(DISTINCT stock_id) AS stocks_with_data,
 FROM (SELECT stock_id, COUNT(*) AS c FROM ohlc GROUP BY stock_id);
 EOF
 ```
-Expected: `stocks_with_data` ≥ 95% of total, `avg_bars` ≥ 1100 (≈ 5 years × 252 trading days).
+Expected: `stocks_with_data` ≥ 95% of total, `avg_bars` ≥ 1500 (≈ 6 years × 252 trading days, allowing for IPO timing).
+
+Also verify date range covers the backtest window:
+
+```bash
+uv run sqlite3 data/twstock.db "SELECT MIN(date) AS earliest, MAX(date) AS latest FROM ohlc"
+```
+Expected: `earliest <= 2020-01-02`, `latest >= today - 3 days`.
 
 - [ ] **Step 5: DB size sanity check**
 
@@ -3628,6 +3652,36 @@ Expected: 1-3 GB.
 
 ```bash
 git tag -a phase-p2 -m "Phase P2 complete: 5-year TWSE backfill"
+```
+
+---
+
+### Task P2.2: Labeled benchmark gate (MANDATORY before P3)
+
+The labeled benchmark from P0.17 needs real backfilled OHLC. It is gated here.
+
+- [ ] **Step 1: Verify each row in tests/fixtures/labels.csv against Goodinfo / TradingView**
+
+Open each `(stock_id, anchor_date)` pair in your chart viewer of choice and confirm the labeled pattern is actually present at that date. Edit `tests/fixtures/labels.csv` in place to correct any mis-identified rows. This is human work; allocate ~3 hours.
+
+- [ ] **Step 2: Run the slow benchmark**
+
+```bash
+TWSTOCK_DB_PATH=data/twstock.db uv run pytest tests/test_labeled_benchmark.py -v -m slow
+```
+Expected: 7 detectors at ≥ 70% recall.
+
+- [ ] **Step 3: Iterate on failures**
+
+If a detector misses ≥ 30% of its labels:
+1. Inspect the missed cases (print debug fields).
+2. Either tighten the labels (if the chart pattern was actually weak) or loosen the detector thresholds (if the detector was genuinely too strict). Re-verify P0 unit tests after detector changes.
+3. Re-run benchmark until all 7 pass.
+
+- [ ] **Step 4: Tag P2 complete**
+
+```bash
+git tag -af phase-p2 -m "Phase P2 complete: 5-year backfill + labeled benchmark green"
 ```
 
 ---
