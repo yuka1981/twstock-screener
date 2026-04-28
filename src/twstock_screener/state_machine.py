@@ -2,7 +2,6 @@ import sqlite3
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 from twstock_screener.db import get_connection
 
@@ -18,10 +17,10 @@ class Transition(StrEnum):
 
 def get_active_alert(
     db_path: Path, stock_id: str, pattern: str
-) -> Optional[sqlite3.Row]:
+) -> sqlite3.Row | None:
     con = get_connection(db_path)
     try:
-        result: Optional[sqlite3.Row] = con.execute(
+        result: sqlite3.Row | None = con.execute(
             "SELECT * FROM alert_state_current WHERE stock_id=? AND pattern=?",
             (stock_id, pattern),
         ).fetchone()
