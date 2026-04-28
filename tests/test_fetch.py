@@ -1,0 +1,60 @@
+from datetime import date
+from unittest.mock import MagicMock, patch
+
+from twstock_screener.db import get_connection, init_db
+from twstock_screener.fetch import fetch_stock_history
+
+
+def test_fetch_stock_history_inserts_rows(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_data = [
+        MagicMock(date=date(2026, 4, 25), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+        MagicMock(date=date(2026, 4, 28), open=101.0, high=103.0, low=100.0,
+                  close=102.0, capacity=460_000_000, turnover=46_920_000_000,
+                  transaction=4_500),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    assert result.success
+    assert result.rows_inserted == 2
+    con = get_connection(db)
+    rows = list(con.execute("SELECT * FROM ohlc WHERE stock_id='2330' ORDER BY date"))
+    assert len(rows) == 2
+    assert rows[0]["close"] == 101.0
+    assert rows[0]["volume"] == 500_000_000
+    assert rows[0]["turnover"] == 50_500_000_000
+
+
+def test_fetch_idempotent_on_repeat(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_data = [
+        MagicMock(date=date(2026, 4, 25), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+        result2 = fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    assert result2.rows_inserted == 0
+    con = get_connection(db)
+    n = con.execute("SELECT COUNT(*) FROM ohlc").fetchone()[0]
+    assert n == 1
+
+
+def test_fetch_handles_exception(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.side_effect = RuntimeError("connection failed")
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    assert not result.success
+    assert "connection failed" in result.error
