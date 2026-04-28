@@ -85,15 +85,17 @@ def main() -> int:
                 if result.success:
                     success += 1
                     breaker.record_success()
-                    suffix = f"{sid} ok rows={result.rows_inserted}"
+                    outcome = f"{sid} ok rows={result.rows_inserted}"
                 else:
                     failed += 1
                     breaker.record_failure()
-                    suffix = f"{sid} FAIL: {result.error}"
+                    outcome = f"{sid} FAIL: {result.error}"
                     logger.warning(
                         "[%d/%d] %s FAIL: %s", i, len(ids), sid, result.error
                     )
-                progress.update(suffix=suffix)
+                progress.update(
+                    suffix=f"{outcome} success={success} fail={failed}"
+                )
         finally:
             progress.close()
         logger.info("done. success=%d fail=%d", success, failed)

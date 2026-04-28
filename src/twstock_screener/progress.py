@@ -1,4 +1,7 @@
-"""Lightweight progress reporter — stdlib only, tty-aware."""
+"""Lightweight progress reporter — stdlib only, tty-aware.
+
+Single-threaded only; do not share a ProgressReporter across threads.
+"""
 from __future__ import annotations
 
 import sys
