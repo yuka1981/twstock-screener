@@ -12,6 +12,15 @@ from twstock_screener.ratelimit import TokenBucket
 logger = logging.getLogger(__name__)
 
 
+def _date_str(d: Any) -> str:
+    """Coerce twstock date/datetime field to YYYY-MM-DD."""
+    if hasattr(d, "date") and callable(d.date):
+        return str(d.date().isoformat())
+    if hasattr(d, "isoformat"):
+        return str(d.isoformat())[:10]
+    return str(d)[:10]
+
+
 @dataclass
 class FetchResult:
     stock_id: str
@@ -37,7 +46,7 @@ def fetch_stock_history(
         for d in data:
             rows.append((
                 stock_id,
-                d.date.isoformat() if hasattr(d.date, "isoformat") else str(d.date),
+                _date_str(d.date),
                 float(d.open),
                 float(d.high),
                 float(d.low),
@@ -58,7 +67,7 @@ def fetch_stock_history(
                 for d in more:
                     rows.append((
                         stock_id,
-                        d.date.isoformat() if hasattr(d.date, "isoformat") else str(d.date),
+                        _date_str(d.date),
                         float(d.open),
                         float(d.high),
                         float(d.low),
