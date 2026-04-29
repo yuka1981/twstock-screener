@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 from twstock_screener.db import get_connection, init_db
@@ -47,6 +47,24 @@ def test_fetch_idempotent_on_repeat(tmp_path):
     con = get_connection(db)
     n = con.execute("SELECT COUNT(*) FROM ohlc").fetchone()[0]
     assert n == 1
+
+
+def test_fetch_normalizes_datetime_to_date_string(tmp_path):
+    """twstock returns datetime objects; DB must store YYYY-MM-DD only."""
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_data = [
+        MagicMock(date=datetime(2026, 4, 25, 0, 0, 0), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    con = get_connection(db)
+    stored = con.execute("SELECT date FROM ohlc WHERE stock_id='2330'").fetchone()[0]
+    assert stored == "2026-04-25", f"expected YYYY-MM-DD only, got {stored!r}"
 
 
 def test_fetch_handles_exception(tmp_path):
