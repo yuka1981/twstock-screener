@@ -21,6 +21,26 @@ def _date_str(d: Any) -> str:
     return str(d)[:10]
 
 
+def _row_or_none(stock_id: str, d: Any) -> tuple[Any, ...] | None:
+    """Build an ohlc row tuple, or None if any required price is missing.
+
+    twstock returns None for OHLC on halted/illiquid days; skip rather
+    than fail the entire stock fetch.
+    """
+    if d.open is None or d.high is None or d.low is None or d.close is None:
+        return None
+    return (
+        stock_id,
+        _date_str(d.date),
+        float(d.open),
+        float(d.high),
+        float(d.low),
+        float(d.close),
+        int(d.capacity) if d.capacity is not None else 0,
+        int(d.turnover) if d.turnover is not None else None,
+    )
+
+
 @dataclass
 class FetchResult:
     stock_id: str
@@ -44,16 +64,9 @@ def fetch_stock_history(
         if not data:
             return FetchResult(stock_id, success=True, rows_inserted=0)
         for d in data:
-            rows.append((
-                stock_id,
-                _date_str(d.date),
-                float(d.open),
-                float(d.high),
-                float(d.low),
-                float(d.close),
-                int(d.capacity) if d.capacity is not None else 0,
-                int(d.turnover) if d.turnover is not None else None,
-            ))
+            row = _row_or_none(stock_id, d)
+            if row is not None:
+                rows.append(row)
         for delta in range(1, months):
             bucket.acquire()
             today = date.today()
@@ -65,16 +78,9 @@ def fetch_stock_history(
             try:
                 more = stock.fetch(year, month)
                 for d in more:
-                    rows.append((
-                        stock_id,
-                        _date_str(d.date),
-                        float(d.open),
-                        float(d.high),
-                        float(d.low),
-                        float(d.close),
-                        int(d.capacity) if d.capacity is not None else 0,
-                        int(d.turnover) if d.turnover is not None else None,
-                    ))
+                    row = _row_or_none(stock_id, d)
+                    if row is not None:
+                        rows.append(row)
             except Exception as exc:
                 logger.warning(
                     "fetch_%d_%d failed for %s: %s", year, month, stock_id, exc

@@ -76,3 +76,28 @@ def test_fetch_handles_exception(tmp_path):
         result = fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
     assert not result.success
     assert "connection failed" in result.error
+
+
+def test_fetch_skips_rows_with_none_ohlc(tmp_path):
+    """twstock returns None on halted/illiquid days; skip the row, don't fail the stock."""
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_data = [
+        MagicMock(date=date(2026, 4, 25), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+        MagicMock(date=date(2026, 4, 26), open=None, high=None, low=None,
+                  close=None, capacity=None, turnover=None, transaction=None),
+        MagicMock(date=date(2026, 4, 28), open=101.0, high=103.0, low=100.0,
+                  close=102.0, capacity=460_000_000, turnover=46_920_000_000,
+                  transaction=4_500),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(db, "1213", months=1, bucket=MagicMock())
+    assert result.success, f"expected success, got error: {result.error}"
+    assert result.rows_inserted == 2
+    con = get_connection(db)
+    rows = list(con.execute("SELECT date FROM ohlc WHERE stock_id='1213' ORDER BY date"))
+    assert [r["date"] for r in rows] == ["2026-04-25", "2026-04-28"]
