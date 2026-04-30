@@ -60,3 +60,32 @@ def test_backfill_logs_total_skipped(seeded_db, monkeypatch, caplog):
     assert "skipped_rows=5" in summary_lines[-1], (
         f"expected skipped_rows=5 in summary, got: {summary_lines[-1]!r}"
     )
+
+
+def test_backfill_aggregates_skipped_from_failed_stocks(seeded_db, monkeypatch, caplog):
+    """Failure-branch FetchResults contribute to total_skipped (locks the contract)."""
+    backfill = _load_backfill()
+    fake_results = {
+        "AAAA": FetchResult("AAAA", success=True, rows_inserted=10, rows_skipped=2),
+        "BBBB": FetchResult(
+            "BBBB", success=False, rows_skipped=4, error="db down"
+        ),
+    }
+
+    def fake_fetch(db_path, sid, months, bucket):
+        return fake_results[sid]
+
+    monkeypatch.setattr(backfill, "fetch_stock_history", fake_fetch)
+    monkeypatch.setattr("sys.argv", ["backfill", "--stocks", "AAAA", "BBBB"])
+
+    with caplog.at_level(logging.INFO, logger="backfill"):
+        backfill.main()
+
+    summary_lines = [
+        r.getMessage() for r in caplog.records if "done." in r.getMessage()
+    ]
+    assert summary_lines, "expected a 'done.' summary log line"
+    assert "skipped_rows=6" in summary_lines[-1], (
+        f"expected skipped_rows=6 (2 from success + 4 from failure), "
+        f"got: {summary_lines[-1]!r}"
+    )

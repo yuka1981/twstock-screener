@@ -126,7 +126,13 @@ def test_fetch_rows_skipped_zero_when_clean(tmp_path):
 
 
 def test_fetch_rows_skipped_preserved_on_exception(tmp_path):
-    """skipped count from fetch_31 must survive a later raise during stock.fetch()."""
+    """skipped count accumulated before failure must survive the outer except.
+
+    The inner monthly loop swallows `stock.fetch()` errors as warnings, so the
+    outer `except` is only reached when DB write setup raises. We patch
+    `get_connection` to force that path and assert the pre-DB skipped count is
+    still reported on the failure FetchResult.
+    """
     db = tmp_path / "fetch.db"
     init_db(db)
     fake_data = [
@@ -138,7 +144,6 @@ def test_fetch_rows_skipped_preserved_on_exception(tmp_path):
     ]
     fake_stock = MagicMock()
     fake_stock.fetch_31.return_value = fake_data
-    fake_stock.fetch.side_effect = RuntimeError("transient")
     with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock), \
          patch("twstock_screener.fetch.get_connection",
                side_effect=RuntimeError("db down")):
