@@ -95,6 +95,7 @@ def fetch_stock_history(
                 )
         con = get_connection(db_path)
         try:
+            # Ensure a stub stocks row exists so the FK constraint is satisfied.
             con.execute(
                 "INSERT OR IGNORE INTO stocks (stock_id, name, market) VALUES (?, ?, ?)",
                 (stock_id, stock_id, "TWSE"),
