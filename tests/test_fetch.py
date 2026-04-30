@@ -98,6 +98,7 @@ def test_fetch_skips_rows_with_none_ohlc(tmp_path):
         result = fetch_stock_history(db, "1213", months=1, bucket=MagicMock())
     assert result.success, f"expected success, got error: {result.error}"
     assert result.rows_inserted == 2
+    assert result.rows_skipped == 1
     con = get_connection(db)
     rows = list(con.execute("SELECT date FROM ohlc WHERE stock_id='1213' ORDER BY date"))
     assert [r["date"] for r in rows] == ["2026-04-25", "2026-04-28"]

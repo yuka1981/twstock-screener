@@ -46,6 +46,7 @@ class FetchResult:
     stock_id: str
     success: bool
     rows_inserted: int = 0
+    rows_skipped: int = 0
     error: str = ""
 
 
