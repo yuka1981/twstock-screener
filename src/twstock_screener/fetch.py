@@ -46,6 +46,7 @@ class FetchResult:
     stock_id: str
     success: bool
     rows_inserted: int = 0
+    rows_skipped: int = 0
     error: str = ""
 
 
@@ -56,16 +57,21 @@ def fetch_stock_history(
     bucket: TokenBucket,
 ) -> FetchResult:
     """Fetch last `months` of OHLC for stock_id and upsert into DB."""
+    skipped = 0
     try:
         stock = twstock.Stock(stock_id)
         rows: list[tuple[Any, ...]] = []
         bucket.acquire()
         data = stock.fetch_31()
         if not data:
-            return FetchResult(stock_id, success=True, rows_inserted=0)
+            return FetchResult(
+                stock_id, success=True, rows_inserted=0, rows_skipped=skipped
+            )
         for d in data:
             row = _row_or_none(stock_id, d)
-            if row is not None:
+            if row is None:
+                skipped += 1
+            else:
                 rows.append(row)
         for delta in range(1, months):
             bucket.acquire()
@@ -79,7 +85,9 @@ def fetch_stock_history(
                 more = stock.fetch(year, month)
                 for d in more:
                     row = _row_or_none(stock_id, d)
-                    if row is not None:
+                    if row is None:
+                        skipped += 1
+                    else:
                         rows.append(row)
             except Exception as exc:
                 logger.warning(
@@ -101,7 +109,13 @@ def fetch_stock_history(
             inserted = cur.rowcount if cur.rowcount >= 0 else len(rows)
         finally:
             con.close()
-        return FetchResult(stock_id, success=True, rows_inserted=inserted)
+        if skipped:
+            logger.info("%s: skipped %d rows with None OHLC", stock_id, skipped)
+        return FetchResult(
+            stock_id, success=True, rows_inserted=inserted, rows_skipped=skipped
+        )
     except Exception as exc:
         logger.exception("fetch failed for %s", stock_id)
-        return FetchResult(stock_id, success=False, error=str(exc))
+        return FetchResult(
+            stock_id, success=False, rows_skipped=skipped, error=str(exc)
+        )

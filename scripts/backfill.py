@@ -62,6 +62,7 @@ def main() -> int:
 
         success = 0
         failed = 0
+        total_skipped = 0
         progress = ProgressReporter(total=len(ids), label="backfill", log_every=50)
         try:
             for i, sid in enumerate(ids, start=1):
@@ -82,6 +83,7 @@ def main() -> int:
                 result = fetch_stock_history(
                     settings.db_path, sid, months=months, bucket=twse_bucket
                 )
+                total_skipped += result.rows_skipped
                 if result.success:
                     success += 1
                     breaker.record_success()
@@ -98,7 +100,10 @@ def main() -> int:
                 )
         finally:
             progress.close()
-        logger.info("done. success=%d fail=%d", success, failed)
+        logger.info(
+            "done. success=%d fail=%d skipped_rows=%d",
+            success, failed, total_skipped,
+        )
         ok = failed < len(ids) * 0.05
         finish_run(
             settings.db_path,
