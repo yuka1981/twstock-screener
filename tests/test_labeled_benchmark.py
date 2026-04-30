@@ -26,7 +26,10 @@ def _benchmark_db_path() -> Path:
     override = os.environ.get("TWSTOCK_BENCHMARK_DB_PATH")
     path = Path(override) if override else DEFAULT_BENCHMARK_DB
     if not path.exists():
-        pytest.skip(f"benchmark DB not found at {path}; run backfill first")
+        pytest.skip(
+            f"benchmark DB not found at {path}; "
+            "run scripts/backfill.py or set TWSTOCK_BENCHMARK_DB_PATH"
+        )
     return path
 
 
