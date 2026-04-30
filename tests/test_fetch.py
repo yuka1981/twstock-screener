@@ -123,3 +123,28 @@ def test_fetch_rows_skipped_zero_when_clean(tmp_path):
     assert result.success
     assert result.rows_inserted == 2
     assert result.rows_skipped == 0
+
+
+def test_fetch_rows_skipped_preserved_on_exception(tmp_path):
+    """skipped count from fetch_31 must survive a later raise during stock.fetch()."""
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_data = [
+        MagicMock(date=date(2026, 4, 25), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+        MagicMock(date=date(2026, 4, 26), open=None, high=None, low=None,
+                  close=None, capacity=None, turnover=None, transaction=None),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    fake_stock.fetch.side_effect = RuntimeError("transient")
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock), \
+         patch("twstock_screener.fetch.get_connection",
+               side_effect=RuntimeError("db down")):
+        result = fetch_stock_history(db, "1213", months=1, bucket=MagicMock())
+    assert not result.success
+    assert "db down" in result.error
+    assert result.rows_skipped == 1, (
+        f"expected skipped count to survive exception, got {result.rows_skipped}"
+    )
