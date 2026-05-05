@@ -1,6 +1,7 @@
-import pytest
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from twstock_screener.db import get_connection, init_db
 from twstock_screener.fetch import fetch_stock_history
