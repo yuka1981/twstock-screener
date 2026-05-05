@@ -1,7 +1,7 @@
 # Spec: parametrize per-field None coverage for `_row_or_none`
 
 **Issue:** [#8](https://github.com/yuka1981/twstock-screener/issues/8) — `test: parametrize fetch None-OHLC test for single-field None cases`
-**Plan review:** Codex consult 2026-05-05 (session `019df6b6-8d4b-7ba2-b529-b23877f2d828`); two rounds of HIGH/MED/LOW feedback folded in below, see §7.
+**Plan review:** Codex consult 2026-05-05 (session `019df6b6-8d4b-7ba2-b529-b23877f2d828`); three rounds of HIGH/MED/LOW feedback plus a post-implementation adversarial review folded in below, see §7.
 **Status:** Awaiting user approval — ready for implementation plan.
 
 ## 1. Problem
@@ -48,8 +48,8 @@ def test_fetch_skips_row_with_any_single_none_ohlc(tmp_path, none_field):
     #          capacity/turnover/transaction are also None (matches existing fixture).
     # - row 3: clean OHLC at (101.0, 103.0, 100.0, 102.0), capacity=460_000_000,
     #          turnover=46_920_000_000, transaction=4_500
-    # Build each MagicMock fresh inside this function (no shared mutable base
-    # dict or object reused across parametrize cases).
+    # Build each SimpleNamespace row fresh inside this function (no shared
+    # mutable base dict or object reused across parametrize cases).
     #
     # Assert:
     #   result.success is True
@@ -64,21 +64,22 @@ def test_fetch_skips_row_with_any_single_none_ohlc(tmp_path, none_field):
 
 ### 4.3 Helper shape
 
-A small inline factory builds each row's MagicMock fresh per parametrize case (no module-level mutable state, no base dict reused across cases). Each mock is constructed with `spec=("date", "open", "high", "low", "close", "capacity", "turnover", "transaction")` so any typo'd attribute access (e.g. `d.opn` or `d.volume`) raises `AttributeError` instead of silently returning a child Mock and masking a test bug.
+A small inline factory builds each row fresh per parametrize case (no module-level mutable state, no base dict reused across cases). The factory returns a `types.SimpleNamespace`, not a `MagicMock`. Reads of an unset attribute on a `SimpleNamespace` raise `AttributeError` immediately, so a typo'd attribute access (e.g. `d.opn` or `d.volume`) surfaces at once. By contrast, `MagicMock(spec=...)` would auto-create a child Mock for unset spec'd attrs, which `float()`/`int()` coerce to `1.0`/`1` — letting bogus rows slip through `_row_or_none` if a future factory edit drifted on a field name.
 
 ```python
-def _ohlc_mock(*, date, open, high, low, close, capacity, turnover, transaction):
-    m = MagicMock(spec=("date", "open", "high", "low", "close",
-                        "capacity", "turnover", "transaction"))
-    m.date = date
-    m.open = open
-    m.high = high
-    m.low = low
-    m.close = close
-    m.capacity = capacity
-    m.turnover = turnover
-    m.transaction = transaction
-    return m
+from types import SimpleNamespace
+
+def _ohlc_row(*, date, open, high, low, close, capacity, turnover, transaction):
+    return SimpleNamespace(
+        date=date,
+        open=open,
+        high=high,
+        low=low,
+        close=close,
+        capacity=capacity,
+        turnover=turnover,
+        transaction=transaction,
+    )
 ```
 
 ### 4.4 What stays untouched
@@ -111,21 +112,27 @@ Matches issue #8's acceptance criteria (the four per-field cases) plus the prese
 
 ## 7. Codex review notes folded in
 
-Two rounds of codex consult, 2026-05-05:
+Three rounds of codex consult plus one adversarial post-implementation review, all 2026-05-05:
 
 **Round 1 (initial design)**
 
-- **HIGH (mock state bleed):** addressed in §4.3 — each MagicMock built fresh, no shared mutable base.
-- **MED (unspecced MagicMock masks typos):** addressed in §4.3 — `spec=("date","open",...)` tuple.
+- **HIGH (mock state bleed):** addressed in §4.3 — each row built fresh, no shared mutable base.
+- **MED (unspecced MagicMock masks typos):** addressed in §4.3 — initially via `MagicMock(spec=(...))`, later replaced (Round 4) with `SimpleNamespace`.
 - **MED (`missing` is ambiguous):** addressed — param renamed `none_field`, function name made explicit (`test_fetch_skips_row_with_any_single_none_ohlc`).
 - **LOW (assertions only check dates):** addressed in §4.2 — exact OHLC/volume/turnover values asserted on surviving rows.
 
 **Round 2 (re-review of folded-in spec)**
 
-- **MED (§4.3 underspecified):** addressed — pinned to `MagicMock(spec=(...))` with the exact attribute tuple, not "either spec or configure_mock".
+- **MED (§4.3 underspecified):** addressed — pinned to a single helper mechanism, not "either spec or configure_mock".
 - **MED (dropping `"all"` loses happy-path coverage):** accepted — the existing `test_fetch_rows_skipped_preserved_on_exception` is on a forced-DB-failure path; success-path all-None could regress without that test failing. Re-added `"all"` as a 5th parametrize case.
 - **MED (§6 wording on "fails earlier"):** addressed — wording softened to "fails on every case".
 - **LOW (acceptance doesn't lock exact assertion shape):** addressed in §5 — references the specific value table in §4.2.
+
+**Round 3 (plan review):** READY TO IMPLEMENT, no new blockers.
+
+**Round 4 (adversarial review of the implemented branch)**
+
+- **MED (`MagicMock(spec=...)` allows attribute *writes*; child-Mock auto-creation on unset reads coerces to 1.0/1 via `float()`/`int()` and could mask future factory typos):** addressed — replaced the helper with `types.SimpleNamespace`. SimpleNamespace raises `AttributeError` on unset reads, so a typo on the factory's right-hand-side surfaces immediately rather than getting coerced silently. The exact-value assertions in §4.2 already provided defense-in-depth on the OHLC fields, but `SimpleNamespace` removes the underlying coercion footgun entirely.
 
 Pushed back on (carries over from Round 1):
 

@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -7,24 +8,24 @@ from twstock_screener.db import get_connection, init_db
 from twstock_screener.fetch import fetch_stock_history
 
 
-def _ohlc_mock(*, date, open, high, low, close, capacity, turnover, transaction):
-    """Build a MagicMock with a fixed attribute spec.
+def _ohlc_row(*, date, open, high, low, close, capacity, turnover, transaction):
+    """Build a SimpleNamespace OHLC row.
 
-    spec= ensures typo'd attribute access (e.g. d.opn, d.volume) raises
-    AttributeError instead of silently returning a child Mock and masking
-    test bugs.
+    Reads of an unset attribute raise AttributeError, so a typo like
+    ``d.opn`` surfaces immediately instead of silently returning a child
+    Mock that ``float()``/``int()`` would coerce to 1.0/1 and let bogus
+    rows slip through.
     """
-    m = MagicMock(spec=("date", "open", "high", "low", "close",
-                        "capacity", "turnover", "transaction"))
-    m.date = date
-    m.open = open
-    m.high = high
-    m.low = low
-    m.close = close
-    m.capacity = capacity
-    m.turnover = turnover
-    m.transaction = transaction
-    return m
+    return SimpleNamespace(
+        date=date,
+        open=open,
+        high=high,
+        low=low,
+        close=close,
+        capacity=capacity,
+        turnover=turnover,
+        transaction=transaction,
+    )
 
 
 def test_fetch_stock_history_inserts_rows(tmp_path):
@@ -126,13 +127,13 @@ def test_fetch_skips_row_with_any_single_none_ohlc(tmp_path, none_field):
         bad_ohlc[none_field] = None
 
     fake_data = [
-        _ohlc_mock(
+        _ohlc_row(
             date=date(2026, 4, 25),
             open=100.0, high=102.0, low=99.0, close=101.0,
             capacity=500_000_000, turnover=50_500_000_000, transaction=5_000,
         ),
-        _ohlc_mock(date=date(2026, 4, 26), **bad_ohlc, **bad_extras),
-        _ohlc_mock(
+        _ohlc_row(date=date(2026, 4, 26), **bad_ohlc, **bad_extras),
+        _ohlc_row(
             date=date(2026, 4, 28),
             open=101.0, high=103.0, low=100.0, close=102.0,
             capacity=460_000_000, turnover=46_920_000_000, transaction=4_500,
