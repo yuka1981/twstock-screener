@@ -15,6 +15,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
+# httpx logs the request URL at INFO; the Telegram URL embeds the bot token.
+# Suppress to keep secrets out of cron logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("analyze")
 
 
