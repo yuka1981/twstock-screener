@@ -2,6 +2,8 @@ data/twstock.db
 data/twstock.db-wal
 data/twstock.db-shm
 .env
+prefab-icon-*.json
+*service-account*.json
 .venv/
 __pycache__/
 *.pyc

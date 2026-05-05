@@ -11,3 +11,6 @@ PROJECT=/home/reid/stock
 
 # Daily analyze + Telegram (08:20, weekdays)
 20 8 * * 1-5 reid  cd $PROJECT && uv run python scripts/analyze.py >> $PROJECT/logs/analyze.log 2>&1
+
+# Daily DB backup to Google Drive (03:30, weekdays — after backfill)
+30 3 * * 1-5 reid  cd $PROJECT && uv run python scripts/upload_db_to_drive.py >> $PROJECT/logs/drive_backup.log 2>&1
