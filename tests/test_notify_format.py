@@ -26,6 +26,20 @@ def _strip_escaped(msg: str) -> str:
     return re.sub(r"\\.", "", msg)
 
 
+def test_build_message_uses_twse_tradingview_prefix():
+    """TradingView returns 404 on /symbols/TPE-XXXX/; TWSE-XXXX is the live URL."""
+    msg = _build_message(
+        today=date(2026, 5, 5),
+        data_date=date(2026, 5, 4),
+        sells=[_candidate("4906", "diamond_top")],
+        buys=[_candidate("2408", "w_bottom")],
+        boxes=[],
+    )
+    assert "/symbols/TWSE\\-4906/" in msg
+    assert "/symbols/TWSE\\-2408/" in msg
+    assert "/symbols/TPE\\-" not in msg
+
+
 def test_build_message_escapes_section_header_parens():
     """Section headers must escape `(` and `)` for Telegram MarkdownV2.
 

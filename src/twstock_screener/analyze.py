@@ -275,7 +275,7 @@ def _build_message(today: date, data_date: date,
             f"  {c.composite:.2f}  ${c.close:.2f}"
         ))
         lines.append(
-            f"   📈 https://www\\.tradingview\\.com/symbols/TPE\\-{c.stock_id}/"
+            f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
         )
     lines.append("")
     lines.append(_md_escape("🟢 買入警告 (前 10)"))
@@ -285,7 +285,7 @@ def _build_message(today: date, data_date: date,
             f"  {c.composite:.2f}  ${c.close:.2f}"
         ))
         lines.append(
-            f"   📈 https://www\\.tradingview\\.com/symbols/TPE\\-{c.stock_id}/"
+            f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
         )
     lines.append("")
     lines.append(_md_escape("⚪ 危險區 — 箱型盤整 (前 5)"))
