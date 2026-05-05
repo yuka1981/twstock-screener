@@ -269,29 +269,38 @@ def _build_message(today: date, data_date: date,
     ))
     lines.append("")
     lines.append(_md_escape("🔴 賣出警告 (前 10)"))
-    for i, c in enumerate(sells, start=1):
-        lines.append(_md_escape(
-            f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
-            f"  {c.composite:.2f}  ${c.close:.2f}"
-        ))
-        lines.append(
-            f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
-        )
+    if sells:
+        for i, c in enumerate(sells, start=1):
+            lines.append(_md_escape(
+                f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
+                f"  {c.composite:.2f}  ${c.close:.2f}"
+            ))
+            lines.append(
+                f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
+            )
+    else:
+        lines.append(_md_escape("(無)"))
     lines.append("")
     lines.append(_md_escape("🟢 買入警告 (前 10)"))
-    for i, c in enumerate(buys, start=1):
-        lines.append(_md_escape(
-            f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
-            f"  {c.composite:.2f}  ${c.close:.2f}"
-        ))
-        lines.append(
-            f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
-        )
+    if buys:
+        for i, c in enumerate(buys, start=1):
+            lines.append(_md_escape(
+                f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
+                f"  {c.composite:.2f}  ${c.close:.2f}"
+            ))
+            lines.append(
+                f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
+            )
+    else:
+        lines.append(_md_escape("(無)"))
     lines.append("")
     lines.append(_md_escape("⚪ 危險區 — 箱型盤整 (前 5)"))
-    for i, c in enumerate(boxes, start=1):
-        lines.append(_md_escape(
-            f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
-            f"  {c.composite:.2f}  ${c.close:.2f}"
-        ))
+    if boxes:
+        for i, c in enumerate(boxes, start=1):
+            lines.append(_md_escape(
+                f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
+                f"  {c.composite:.2f}  ${c.close:.2f}"
+            ))
+    else:
+        lines.append(_md_escape("(無)"))
     return "\n".join(lines)
