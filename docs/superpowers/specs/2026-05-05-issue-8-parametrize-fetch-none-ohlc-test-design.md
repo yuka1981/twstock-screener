@@ -1,7 +1,7 @@
 # Spec: parametrize per-field None coverage for `_row_or_none`
 
 **Issue:** [#8](https://github.com/yuka1981/twstock-screener/issues/8) — `test: parametrize fetch None-OHLC test for single-field None cases`
-**Plan review:** Codex consult 2026-05-05 (session `019df6b6-8d4b-7ba2-b529-b23877f2d828`); HIGH/MED feedback folded in below, see §7.
+**Plan review:** Codex consult 2026-05-05 (session `019df6b6-8d4b-7ba2-b529-b23877f2d828`); two rounds of HIGH/MED/LOW feedback folded in below, see §7.
 **Status:** Awaiting user approval — ready for implementation plan.
 
 ## 1. Problem
@@ -18,45 +18,68 @@ The existing test `tests/test_fetch.py::test_fetch_skips_rows_with_none_ohlc` (l
 ## 2. Goals
 
 - Each per-field branch (`open`, `high`, `low`, `close`) of the `_row_or_none` guard is exercised by a dedicated test case.
+- The original all-fields-None happy-path scenario remains covered (separately from `test_fetch_rows_skipped_preserved_on_exception`, which exercises all-None on a forced-failure path only).
 - A future refactor that breaks any single per-field branch fails at least one test case.
 - Test failures pinpoint *which* field's branch regressed via the parametrize id.
-- Surviving rows are validated for content correctness, not just presence.
+- Surviving rows are validated for content correctness with exact expected values, not just presence.
 
 ## 3. Non-goals
 
 - **Not** covering `_row_or_none`'s `capacity`/`turnover` coercion lines (`fetch.py:39-40`). Those are a separate guard (`int(x) if x is not None else 0/None`) on optional fields, not part of the skip-or-keep decision. Issue #8 explicitly scopes to OHLC. See §8 for follow-up.
-- **Not** modifying `test_fetch_rows_skipped_preserved_on_exception` (`tests/test_fetch.py:128`). It uses all-None data deliberately to exercise the exception-path skipped-count preservation, which is an orthogonal invariant.
+- **Not** modifying `test_fetch_rows_skipped_preserved_on_exception` (`tests/test_fetch.py:128`). Its all-None data is on the forced-DB-failure path, which is an orthogonal invariant from the happy-path skip behavior covered here.
 - **No production code changes.** The guard is correct as-is; this is purely strengthening tests.
 
 ## 4. Design
 
 ### 4.1 What changes
 
-Replace `test_fetch_skips_rows_with_none_ohlc` (one all-None case, lines 81–104) with one parametrized test covering exactly the four per-field branches that issue #8 asks for. The all-None scenario is **dropped** from this test — it's redundant with `test_fetch_rows_skipped_preserved_on_exception`, which already exercises that data shape on a different code path.
+Replace `test_fetch_skips_rows_with_none_ohlc` (one all-None case, lines 81–104) with one parametrized test covering five scenarios: each of `open`, `high`, `low`, `close` set to `None` individually (the four per-field branches issue #8 asks for), plus an `"all"` case where every OHLC field is `None` (preserves the original happy-path coverage that the existing exception-path test does not independently provide).
 
 ### 4.2 Test shape
 
 ```python
-@pytest.mark.parametrize("none_field", ["open", "high", "low", "close"])
+@pytest.mark.parametrize("none_field", ["open", "high", "low", "close", "all"])
 def test_fetch_skips_row_with_any_single_none_ohlc(tmp_path, none_field):
     # Three rows on three different dates:
-    # - row 1: clean OHLC
-    # - row 2: clean OHLC EXCEPT `none_field` set to None
-    # - row 3: clean OHLC
-    # Build each MagicMock fresh inside this function (no shared mutable base).
-    # Use spec= or attribute assertions so a typo'd field name fails loudly.
+    # - row 1: clean OHLC at (100.0, 102.0, 99.0, 101.0), capacity=500_000_000,
+    #          turnover=50_500_000_000, transaction=5_000
+    # - row 2: clean OHLC EXCEPT the OHLC field(s) named by `none_field` are None.
+    #          For "all", all four (open/high/low/close) are None and
+    #          capacity/turnover/transaction are also None (matches existing fixture).
+    # - row 3: clean OHLC at (101.0, 103.0, 100.0, 102.0), capacity=460_000_000,
+    #          turnover=46_920_000_000, transaction=4_500
+    # Build each MagicMock fresh inside this function (no shared mutable base
+    # dict or object reused across parametrize cases).
     #
     # Assert:
     #   result.success is True
     #   result.rows_inserted == 2
     #   result.rows_skipped == 1
-    #   DB contains exactly the two clean dates
-    #   DB rows have the expected OHLC/volume/turnover values for the surviving rows
+    #   DB rows = exactly two; dates = ["2026-04-25", "2026-04-28"]
+    #   Row 1 OHLC == (100.0, 102.0, 99.0, 101.0); volume == 500_000_000;
+    #     turnover == 50_500_000_000
+    #   Row 2 OHLC == (101.0, 103.0, 100.0, 102.0); volume == 460_000_000;
+    #     turnover == 46_920_000_000
 ```
 
 ### 4.3 Helper shape
 
-A small inline factory builds each row's MagicMock from a per-call dict (no module-level mutable state). Using `MagicMock(spec=...)` against a tuple of expected attribute names — or an explicit `configure_mock(**attrs)` after constructing with no args — ensures a typo like `d.opn` fails the test instead of silently returning a Mock.
+A small inline factory builds each row's MagicMock fresh per parametrize case (no module-level mutable state, no base dict reused across cases). Each mock is constructed with `spec=("date", "open", "high", "low", "close", "capacity", "turnover", "transaction")` so any typo'd attribute access (e.g. `d.opn` or `d.volume`) raises `AttributeError` instead of silently returning a child Mock and masking a test bug.
+
+```python
+def _ohlc_mock(*, date, open, high, low, close, capacity, turnover, transaction):
+    m = MagicMock(spec=("date", "open", "high", "low", "close",
+                        "capacity", "turnover", "transaction"))
+    m.date = date
+    m.open = open
+    m.high = high
+    m.low = low
+    m.close = close
+    m.capacity = capacity
+    m.turnover = turnover
+    m.transaction = transaction
+    return m
+```
 
 ### 4.4 What stays untouched
 
@@ -69,10 +92,11 @@ A small inline factory builds each row's MagicMock from a per-call dict (no modu
 
 ## 5. Acceptance
 
-Matches issue #8's acceptance criteria:
+Matches issue #8's acceptance criteria (the four per-field cases) plus the preserved all-None case:
 
-- Four parametrize cases collected (`pytest tests/test_fetch.py --collect-only -q` shows `[open]`, `[high]`, `[low]`, `[close]`).
+- Five parametrize cases collected — `pytest tests/test_fetch.py --collect-only -q` shows `[open]`, `[high]`, `[low]`, `[close]`, `[all]`.
 - Each case verifies the bad row is skipped while the surrounding clean rows still insert.
+- Per-row value assertions exactly as listed in §4.2 (OHLC tuple, volume, turnover for both surviving rows).
 - `pytest tests/test_fetch.py -m "not slow"` passes.
 - The other fetch tests (listed in §4.4) continue to pass unchanged.
 
@@ -83,19 +107,27 @@ Matches issue #8's acceptance criteria:
 | `if d.open is None:` (drops 3 fields) | passes (all-None still triggers) | fails on `[high]`, `[low]`, `[close]` |
 | `if all(x is None for x in [o,h,l,c]):` | passes | fails on every per-field case |
 | `if d.open is None and d.high is None and d.low is None and d.close is None:` | passes | fails on every per-field case |
-| Removing the guard entirely | fails (DB write breaks on `float(None)`) | fails earlier and on every per-field case |
+| Removing the guard entirely | fails (DB write breaks on `float(None)`) | fails on every case |
 
 ## 7. Codex review notes folded in
 
-From the 2026-05-05 codex consult:
+Two rounds of codex consult, 2026-05-05:
+
+**Round 1 (initial design)**
 
 - **HIGH (mock state bleed):** addressed in §4.3 — each MagicMock built fresh, no shared mutable base.
-- **MED (unspecced MagicMock masks typos):** addressed in §4.3 — `spec=` or explicit attr config.
-- **MED (`"all"` redundant):** addressed — dropped from parametrize. Issue #8 only asks for the four per-field cases.
+- **MED (unspecced MagicMock masks typos):** addressed in §4.3 — `spec=("date","open",...)` tuple.
 - **MED (`missing` is ambiguous):** addressed — param renamed `none_field`, function name made explicit (`test_fetch_skips_row_with_any_single_none_ohlc`).
-- **LOW (assertions only check dates):** addressed in §4.2 — assert OHLC values on surviving rows.
+- **LOW (assertions only check dates):** addressed in §4.2 — exact OHLC/volume/turnover values asserted on surviving rows.
 
-Pushed back on:
+**Round 2 (re-review of folded-in spec)**
+
+- **MED (§4.3 underspecified):** addressed — pinned to `MagicMock(spec=(...))` with the exact attribute tuple, not "either spec or configure_mock".
+- **MED (dropping `"all"` loses happy-path coverage):** accepted — the existing `test_fetch_rows_skipped_preserved_on_exception` is on a forced-DB-failure path; success-path all-None could regress without that test failing. Re-added `"all"` as a 5th parametrize case.
+- **MED (§6 wording on "fails earlier"):** addressed — wording softened to "fails on every case".
+- **LOW (acceptance doesn't lock exact assertion shape):** addressed in §5 — references the specific value table in §4.2.
+
+Pushed back on (carries over from Round 1):
 
 - **HIGH (capacity/turnover guard not covered):** out of scope per §3. Tracked as follow-up in §8.
 - **HIGH (one test couples scenarios):** parametrize ids give per-case failure pinpoint; not adopted.
