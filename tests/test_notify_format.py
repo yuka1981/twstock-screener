@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from twstock_screener.analyze import Candidate, _build_message
+from twstock_screener.analyze import Candidate, _build_message, _md_escape
 from twstock_screener.state_machine import Transition
 
 
@@ -24,6 +24,24 @@ def _candidate(stock_id: str, pattern: str) -> Candidate:
 def _strip_escaped(msg: str) -> str:
     """Remove `\\X` pairs so we can scan for unescaped MarkdownV2 specials."""
     return re.sub(r"\\.", "", msg)
+
+
+def test_build_message_shows_placeholder_when_section_empty():
+    """Empty sections must render `(無)` so the section is not visually shrunk."""
+    msg = _build_message(
+        today=date(2026, 5, 5),
+        data_date=date(2026, 5, 4),
+        sells=[],
+        buys=[_candidate("2408", "w_bottom")],
+        boxes=[],
+    )
+    placeholder = _md_escape("(無)")
+    assert placeholder in msg
+    sell_idx = msg.index(_md_escape("🔴 賣出警告 (前 10)"))
+    buy_idx = msg.index(_md_escape("🟢 買入警告 (前 10)"))
+    box_idx = msg.index(_md_escape("⚪ 危險區 — 箱型盤整 (前 5)"))
+    assert placeholder in msg[sell_idx:buy_idx]
+    assert placeholder in msg[box_idx:]
 
 
 def test_build_message_uses_twse_tradingview_prefix():
