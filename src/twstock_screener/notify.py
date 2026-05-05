@@ -1,9 +1,12 @@
+import logging
 import sqlite3
 import time
 from datetime import date
 from pathlib import Path
 
 import httpx
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def build_idempotency_key(

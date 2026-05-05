@@ -268,7 +268,7 @@ def _build_message(today: date, data_date: date,
         f"📊 台股型態警示  {today.isoformat()} (資料截至 {data_date.isoformat()})"
     ))
     lines.append("")
-    lines.append("🔴 賣出警告 (前 10)")
+    lines.append(_md_escape("🔴 賣出警告 (前 10)"))
     for i, c in enumerate(sells, start=1):
         lines.append(_md_escape(
             f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
@@ -278,7 +278,7 @@ def _build_message(today: date, data_date: date,
             f"   📈 https://www\\.tradingview\\.com/symbols/TPE\\-{c.stock_id}/"
         )
     lines.append("")
-    lines.append("🟢 買入警告 (前 10)")
+    lines.append(_md_escape("🟢 買入警告 (前 10)"))
     for i, c in enumerate(buys, start=1):
         lines.append(_md_escape(
             f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
@@ -288,7 +288,7 @@ def _build_message(today: date, data_date: date,
             f"   📈 https://www\\.tradingview\\.com/symbols/TPE\\-{c.stock_id}/"
         )
     lines.append("")
-    lines.append("⚪ 危險區 — 箱型盤整 (前 5)")
+    lines.append(_md_escape("⚪ 危險區 — 箱型盤整 (前 5)"))
     for i, c in enumerate(boxes, start=1):
         lines.append(_md_escape(
             f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
