@@ -1,9 +1,14 @@
+import logging
 import sqlite3
 import time
 from datetime import date
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+_BODY_LOG_LIMIT = 500
 
 
 def build_idempotency_key(
@@ -20,8 +25,19 @@ def _post_telegram(token: str, chat_id: str, message: str) -> bool:
             resp = httpx.post(url, json=payload, timeout=10.0)
             if resp.status_code == 200:
                 return True
-        except httpx.HTTPError:
-            pass
+            logger.warning(
+                "telegram POST returned status=%d body=%r (attempt %d/2)",
+                resp.status_code,
+                (resp.text or "")[:_BODY_LOG_LIMIT],
+                attempt,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "telegram POST raised %s: %s (attempt %d/2)",
+                type(exc).__name__,
+                exc,
+                attempt,
+            )
         if attempt == 1:
             time.sleep(2.0)
     return False
