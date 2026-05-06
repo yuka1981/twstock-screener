@@ -1,7 +1,7 @@
 # Spec: pin explicit `uv` executable path in cron + drop PATH precedence
 
 **Issue:** [#19](https://github.com/yuka1981/twstock-screener/issues/19) — `ops/cron: pin explicit uv executable path + preflight check (don't depend on PATH precedence)`
-**Plan review:** Codex consult 2026-05-06 (session `019dfb13-082e-7c40-9f50-fc88116c414d`); HIGH/MED feedback folded in below, see §7.
+**Plan review:** Codex consult 2026-05-06 (session `019dfb13-082e-7c40-9f50-fc88116c414d`); two rounds of HIGH/MED feedback folded in below, see §7.
 **Status:** Awaiting user approval — ready for implementation plan.
 
 ## 1. Problem
@@ -60,17 +60,22 @@ UV=/home/reid/.local/bin/uv
 
 ### 4.3 Failure-mode contract
 
-When `/home/reid/.local/bin/uv` does not exist or is not executable, each cron line produces a "No such file or directory" message that **contains the absolute path verbatim**. The exact prefix depends on how the shell prints argv0 (`bash:` vs `/bin/bash:` etc.) and is not contractually pinned. Example (one observed form):
+The contract is narrow and intentional: **whenever a cron line fails because `$UV` could not be invoked, the absolute path `/home/reid/.local/bin/uv` appears verbatim in the failure message logged to `logs/<job>.log`**. The errno-specific wording is *not* contractually pinned, because the failure mode is shell-dependent and class-dependent. Two common variants:
 
 ```
 bash: line 1: /home/reid/.local/bin/uv: No such file or directory
+bash: line 1: /home/reid/.local/bin/uv: Permission denied
 ```
 
-The greppable invariant is the path-first segment, not the prefix. Operators should match on the path:
+(The argv0 prefix — `bash:` vs `/bin/bash:` — is not pinned either; it depends on how the shell was invoked. Ignore it for grep purposes.)
+
+The greppable invariant is the absolute path followed by a colon. Operators should match on the path:
 
 ```bash
-grep "/home/reid/.local/bin/uv: No such file" logs/*.log
+grep "/home/reid/.local/bin/uv:" logs/*.log
 ```
+
+This catches every shell-emitted error class that prints argv0-with-colon (`No such file or directory`, `Permission denied`, `cannot execute binary file`, etc.) without locking to one phrase that future shell or locale changes might alter. False positives are unlikely — the only legitimate place this exact path-colon prefix appears in a job log is a shell error.
 
 By contrast, the pre-#18 failure message (`uv: command not found`) gave no hint about which path was searched — debugging required reproducing cron's `$PATH` separately. Pinning the absolute path narrows the failure surface and makes the error self-documenting; it does **not** eliminate the underlying single-point-failure on a mutable user-local binary (see §6).
 
@@ -84,7 +89,10 @@ The first three checks are bash-equivalent — they validate the shell-level beh
 - [ ] Bash-equivalent negative check: with `UV=/home/reid/.local/bin/uv-nonexistent` the same shell command fails with a message containing `/home/reid/.local/bin/uv-nonexistent: No such file or directory`. (No production binary moved — only the var pointed at a fake path for the test.)
 - [ ] Re-installation steps documented in PR description: `sudo cp scripts/twstock-screener.cron /etc/cron.d/twstock-screener && sudo chmod 644 /etc/cron.d/twstock-screener && sudo chown root:root /etc/cron.d/twstock-screener`.
 - [ ] After re-install, `diff scripts/twstock-screener.cron /etc/cron.d/twstock-screener` is empty.
-- [ ] **Post-install cron-level observation** (the only check that exercises cron itself): after the next scheduled fire (03:00 backfill is the soonest weekday slot), confirm `logs/fetch.log` either stays empty (success) or contains a message matching the §4.3 grep pattern. If neither (e.g., a different error class), investigate before declaring the change validated.
+- [ ] **Post-install cron-level observation** (the only check that exercises cron itself): after the next scheduled fire (03:00 backfill is the soonest weekday slot), inspect `logs/fetch.log`:
+    - **Success:** the file contains the script's normal progress output and ends with a `done.` line from `scripts/backfill.py` (e.g. `INFO done. success=NN fail=NN skipped_rows=NN`). A successful run is *not* an empty log — `backfill.py` prints progress lines as it iterates 1050 stocks.
+    - **Failure (in scope of this change):** the file contains a line matching the §4.3 grep pattern (`/home/reid/.local/bin/uv:`). The cron wrapping is doing what the spec claims.
+    - **Failure (out of scope):** the file is empty (job didn't produce output at all — earlier-than-expected crash, cron didn't fire, etc.) or contains a different error class (e.g. Python exception). Investigate before declaring the change validated; do not assume cron-level success without a positive signal.
 
 ## 6. What this does NOT solve
 
@@ -94,18 +102,27 @@ For the next layer of defense — version pinning, watchdog alerting, or a wrapp
 
 ## 7. Codex review notes folded in
 
-Codex consult 2026-05-06:
+Two rounds of codex consult, 2026-05-06:
 
-- **HIGH (failure-message exact-string contract was brittle):** addressed in §4.3 — replaced the locked `/bin/bash: line 1: ...` form with a path-first invariant ("the absolute path appears verbatim, prefix is shell-dependent"). Grep example updated to match the path token, not the `uv:` token.
-- **HIGH (acceptance only validated bash, not cron):** addressed in §5 — bash-level checks are now explicitly labeled "bash-equivalent" with their limitation called out, and a post-install cron-level observation step was added to validate the actual cron wrapping after the first scheduled fire.
+**Round 1 (initial spec)**
+
+- **HIGH (failure-message exact-string contract was brittle):** addressed in §4.3 — argv0 prefix is no longer locked.
+- **HIGH (acceptance only validated bash, not cron):** addressed in §5 — bash-level checks now labeled "bash-equivalent" with limitation called out; post-install cron-level observation step added.
 - **MED (grep pattern wrong for new message format):** addressed in §4.3.
-- **MED ("strict improvement" overclaim):** addressed in §4.3 — wording softened; the residual single-point-failure is acknowledged inline and disclaimed in §6.
+- **MED ("strict improvement" overclaim):** softened in §4.3.
 - **MED (README manual commands still use bare `uv`):** addressed in §3 — non-goal made explicit.
+
+**Round 2 (re-review of folded-in spec)**
+
+- **HIGH (§4.3 conflated ENOENT with permission errors):** addressed — `not executable` yields `Permission denied`, not `No such file or directory`. Contract rewritten around the path-colon invariant which is common to *both* error classes (and others). Grep example broadened from a phrase-locked match to `grep "/home/reid/.local/bin/uv:"` so it catches any shell-emitted error that prefixes argv0.
+- **HIGH (§5 "empty log = success" was wrong):** addressed — `backfill.py` prints progress lines, so successful runs are noisy. Acceptance criterion rewritten with three explicit outcomes (success contains `done.`; in-scope failure matches §4.3 grep; out-of-scope failure is empty log or different error class — not silently treated as success).
+- **MED (grep pattern was still phrase-locked across error variants):** addressed in §4.3 — broadened to path-colon match.
+- **LOW (Round-1 §7 wording overstated the grep change):** corrected by Round-2 rewrite.
 
 Pushed back on:
 
-- **LOW (cron variable-expansion clarification):** spec already implicitly correct via `SHELL=/bin/bash` pinning the command-line shell; not adding an explanatory paragraph.
-- **LOW (`uv self update` race):** already disclaimed in §6 and tracked under §8 follow-ups.
+- **LOW (cron variable-expansion clarification):** spec already implicitly correct via `SHELL=/bin/bash`; not adding an explanatory paragraph.
+- **LOW (`uv self update` race):** disclaimed in §6, tracked under §8.
 
 ## 8. Follow-up
 
