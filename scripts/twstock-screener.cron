@@ -1,6 +1,8 @@
 # /etc/cron.d/twstock-screener
 SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# /home/reid/.local/bin must precede the system PATH so cron can find `uv`.
+# Without it, every job here fails immediately with `uv: command not found`.
+PATH=/home/reid/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 PROJECT=/home/reid/stock
 
 # Monthly metadata refresh (stocks list + holidays)
