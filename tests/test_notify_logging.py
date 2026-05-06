@@ -99,3 +99,45 @@ def test_post_telegram_failure_logs_do_not_leak_bot_token(monkeypatch, caplog):
     with caplog.at_level(logging.DEBUG, logger="twstock_screener.notify"):
         _post_telegram(secret_token, "12345", "msg")
     assert secret_token not in caplog.text, "bot token leaked via HTTPError log"
+
+
+def test_post_telegram_redacts_token_when_body_reflects_url(monkeypatch, caplog):
+    """If an upstream error body echoes the request URL, redaction must scrub the token."""
+    secret_token = "8521731131:THIS_IS_A_SECRET_TEST_TOKEN_NOT_REAL"
+    reflective_body = (
+        '{"ok":false,"error_code":404,"description":'
+        f'"Not Found: https://api.telegram.org/bot{secret_token}/sendMessage"}}'
+    )
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_a, **_kw: SimpleNamespace(status_code=404, text=reflective_body),
+    )
+    monkeypatch.setattr("twstock_screener.notify.time.sleep", lambda _s: None)
+
+    with caplog.at_level(logging.DEBUG, logger="twstock_screener.notify"):
+        _post_telegram(secret_token, "12345", "msg")
+
+    assert secret_token not in caplog.text, "bot token leaked via reflected response body"
+    assert "404" in caplog.text
+    assert "***" in caplog.text
+
+
+def test_post_telegram_redacts_token_when_exception_embeds_url(monkeypatch, caplog):
+    """httpx.ConnectError can stringify with the request URL — redaction must catch that."""
+    secret_token = "8521731131:THIS_IS_A_SECRET_TEST_TOKEN_NOT_REAL"
+
+    def raise_with_url(*_a, **_kw):
+        raise httpx.ConnectError(
+            f"connection refused for url='https://api.telegram.org/bot{secret_token}/sendMessage'"
+        )
+
+    monkeypatch.setattr(httpx, "post", raise_with_url)
+    monkeypatch.setattr("twstock_screener.notify.time.sleep", lambda _s: None)
+
+    with caplog.at_level(logging.DEBUG, logger="twstock_screener.notify"):
+        _post_telegram(secret_token, "12345", "msg")
+
+    assert secret_token not in caplog.text, "bot token leaked via stringified exception"
+    assert "ConnectError" in caplog.text
+    assert "***" in caplog.text

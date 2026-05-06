@@ -17,6 +17,19 @@ def build_idempotency_key(
     return f"{run_date.isoformat()}|{stock_id}|{pattern}|{transition}"
 
 
+def _redact_token(text: str, token: str) -> str:
+    """Strip the bot token from any string before it reaches a log sink.
+
+    Applied to response bodies and exception messages because realistic
+    httpx errors (e.g., connection failures with the request URL embedded
+    in the message) and reflective upstream error responses can both
+    surface ``bot<token>``.
+    """
+    if not token:
+        return text
+    return text.replace(token, "***")
+
+
 def _post_telegram(token: str, chat_id: str, message: str) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "MarkdownV2"}
@@ -25,17 +38,18 @@ def _post_telegram(token: str, chat_id: str, message: str) -> bool:
             resp = httpx.post(url, json=payload, timeout=10.0)
             if resp.status_code == 200:
                 return True
+            body = _redact_token(resp.text or "", token)[:_BODY_LOG_LIMIT]
             logger.warning(
                 "telegram POST returned status=%d body=%r (attempt %d/2)",
                 resp.status_code,
-                (resp.text or "")[:_BODY_LOG_LIMIT],
+                body,
                 attempt,
             )
         except httpx.HTTPError as exc:
             logger.warning(
                 "telegram POST raised %s: %s (attempt %d/2)",
                 type(exc).__name__,
-                exc,
+                _redact_token(str(exc), token),
                 attempt,
             )
         if attempt == 1:
