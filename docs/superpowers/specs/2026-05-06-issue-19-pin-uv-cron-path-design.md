@@ -34,6 +34,8 @@ Single file: `scripts/twstock-screener.cron`.
 - Replace each `uv run python ...` (4 occurrences) with `$UV run python ...`.
 - Remove `/home/reid/.local/bin:` from the `PATH` line. Once jobs reference `$UV` by absolute path, the PATH prepend serves no purpose and re-introduces the same mutable-PATH risk for any future `uv`-adjacent tool.
 
+**PATH-reduction safety check (host-specific):** Dropping `/home/reid/.local/bin` from cron PATH is only safe if no scheduled script invokes a bare-name binary that lives there. The relevant non-`uv` external tool is `rclone`, called via `subprocess.run(["rclone", ...])` in `scripts/upload_db_to_drive.py`. Verified on this host (2026-05-06): `which rclone` → `/usr/bin/rclone` (system PATH, not `~/.local/bin`). The PATH drop does not regress the 03:30 backup job. Re-verify before deploying on a different host or if `rclone` ever migrates to `~/.local/bin` (e.g., user-local install).
+
 ### 4.2 Final cron file shape
 
 ```cron
@@ -93,6 +95,11 @@ The first three checks are bash-equivalent — they validate the shell-level beh
     - **Success:** the file contains the script's normal progress output and ends with a `done.` line from `scripts/backfill.py` (e.g. `INFO done. success=NN fail=NN skipped_rows=NN`). A successful run is *not* an empty log — `backfill.py` prints progress lines as it iterates 1050 stocks.
     - **Failure (in scope of this change):** the file contains a line matching the §4.3 grep pattern (`/home/reid/.local/bin/uv:`). The cron wrapping is doing what the spec claims.
     - **Failure (out of scope):** the file is empty (job didn't produce output at all — earlier-than-expected crash, cron didn't fire, etc.) or contains a different error class (e.g. Python exception). Investigate before declaring the change validated; do not assume cron-level success without a positive signal.
+- [ ] **Post-install drive-backup observation** (covers the PATH-reduction risk for `rclone`, per §4.1): after the 03:30 weekday backup fire, inspect `logs/drive_backup.log`:
+    - **Success:** the file ends with the `[upload_db_to_drive] uploaded ...` info line emitted by `scripts/upload_db_to_drive.py` after `subprocess.run(["rclone", "copyto", ...], check=True)` returns 0. A successful run is short but non-empty.
+    - **Failure (PATH regression — would mean §4.1 host-verification was wrong):** any line matching `grep -E "rclone: command not found|FileNotFoundError.*rclone" logs/drive_backup.log`. The PATH drop has stranded the rclone lookup. Revert `PATH` line to include `/home/reid/.local/bin` OR pin `rclone` explicitly via a new `RCLONE=` variable, and re-verify.
+    - **Failure (in scope of this change):** any line matching `/home/reid/.local/bin/uv:` (means `$UV` itself didn't resolve before the script even started). Same in-scope failure mode as the fetch job.
+    - **Failure (out of scope):** empty log, rclone non-zero exit on a real upload error (network/auth/quota), or a Python exception unrelated to PATH. Investigate.
 
 ## 6. What this does NOT solve
 
@@ -123,6 +130,11 @@ Pushed back on:
 
 - **LOW (cron variable-expansion clarification):** spec already implicitly correct via `SHELL=/bin/bash`; not adding an explanatory paragraph.
 - **LOW (`uv self update` race):** disclaimed in §6, tracked under §8.
+
+**Round 3 (post-implementation adversarial review against `master`)**
+
+- **HIGH (PATH reduction may break `rclone` resolution in `upload_db_to_drive.py`):** empirically false on this host (`which rclone` → `/usr/bin/rclone`, system PATH covers it), but the inferential risk is real and host-specific. Addressed in §4.1 — added a "PATH-reduction safety check" paragraph documenting the `which rclone` verification and the re-check requirement for any future host or `rclone` migration to `~/.local/bin`.
+- **MED (acceptance only validates fetch.log, ignores drive_backup.log):** legitimate observation gap. Addressed in §5 — added a parallel post-install bullet for `logs/drive_backup.log` after the 03:30 fire, with a dedicated PATH-regression failure mode (`rclone: command not found` / `FileNotFoundError`) and remediation guidance.
 
 ## 8. Follow-up
 
