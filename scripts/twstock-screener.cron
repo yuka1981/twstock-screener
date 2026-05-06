@@ -1,18 +1,19 @@
 # /etc/cron.d/twstock-screener
 SHELL=/bin/bash
-# /home/reid/.local/bin must precede the system PATH so cron can find `uv`.
-# Without it, every job here fails immediately with `uv: command not found`.
-PATH=/home/reid/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 PROJECT=/home/reid/stock
+# Pin uv by absolute path so jobs do not depend on $PATH precedence.
+# A missing/moved binary fails loudly with the explicit path in logs/<job>.log.
+UV=/home/reid/.local/bin/uv
 
 # Monthly metadata refresh (stocks list + holidays)
-0  2 1 * *   reid  cd $PROJECT && uv run python scripts/refresh_metadata.py >> $PROJECT/logs/metadata.log 2>&1
+0  2 1 * *   reid  cd $PROJECT && $UV run python scripts/refresh_metadata.py >> $PROJECT/logs/metadata.log 2>&1
 
 # Daily fetch (03:00, weekdays)
-0  3 * * 1-5 reid  cd $PROJECT && uv run python scripts/backfill.py --days 5 >> $PROJECT/logs/fetch.log 2>&1
+0  3 * * 1-5 reid  cd $PROJECT && $UV run python scripts/backfill.py --days 5 >> $PROJECT/logs/fetch.log 2>&1
 
 # Daily analyze + Telegram (08:20, weekdays)
-20 8 * * 1-5 reid  cd $PROJECT && uv run python scripts/analyze.py >> $PROJECT/logs/analyze.log 2>&1
+20 8 * * 1-5 reid  cd $PROJECT && $UV run python scripts/analyze.py >> $PROJECT/logs/analyze.log 2>&1
 
 # Daily DB backup to Google Drive (03:30, weekdays — after backfill)
-30 3 * * 1-5 reid  cd $PROJECT && uv run python scripts/upload_db_to_drive.py >> $PROJECT/logs/drive_backup.log 2>&1
+30 3 * * 1-5 reid  cd $PROJECT && $UV run python scripts/upload_db_to_drive.py >> $PROJECT/logs/drive_backup.log 2>&1
