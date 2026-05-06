@@ -14,3 +14,8 @@ htmlcov/
 .coverage
 logs/*.log
 12pOQ8zoxM0VAwgWnPwpCTUL8X2GiLYur
+
+# CCB (claude_code_bridge) project state — local-only, disabled for this repo
+.ccb/
+# Codex consult session marker (per-machine, transient)
+.context/
