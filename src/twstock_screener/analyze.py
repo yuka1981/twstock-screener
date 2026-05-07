@@ -157,6 +157,22 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         con.close()
     active_pairs = {(r["stock_id"], r["pattern"]) for r in active_rows}
 
+    # Patterns crossing the age cutoff get archived later in this run via
+    # apply_expiry(). Compute them up front and drop matching candidates so
+    # the digest does not advertise signals that the same execution is about
+    # to retire — the user would otherwise see an "active" pattern in the
+    # Telegram message that is already in alert_history by the time they
+    # click through.
+    cutoff = today - timedelta(days=settings.max_alert_age_days)
+    expired_keys = {
+        (r["stock_id"], r["pattern"])
+        for r in active_rows
+        if date.fromisoformat(r["first_seen"]) <= cutoff
+    }
+    candidates = [
+        c for c in candidates if (c.stock_id, c.pattern) not in expired_keys
+    ]
+
     for c in candidates:
         key = (c.stock_id, c.pattern)
         if key in active_pairs:
@@ -205,17 +221,8 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     for sid, pattern, _name in invalidations:
         apply_invalidation(settings.db_path, sid, pattern, today=today)
 
-    cutoff = today - timedelta(days=settings.max_alert_age_days)
-    con = get_connection(settings.db_path)
-    try:
-        old = list(con.execute(
-            "SELECT stock_id, pattern FROM alert_state_current WHERE first_seen <= ?",
-            (cutoff.isoformat(),),
-        ))
-    finally:
-        con.close()
-    for r in old:
-        apply_expiry(settings.db_path, r["stock_id"], r["pattern"], today=today)
+    for sid, pattern in expired_keys:
+        apply_expiry(settings.db_path, sid, pattern, today=today)
 
     persisted = {(c.stock_id, c.pattern): c.transition for c in candidates}
     for c in (sells + buys + boxes):

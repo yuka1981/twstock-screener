@@ -109,6 +109,75 @@ def test_batch_summary_pushes_on_refreshed_only_day(seeded_db, monkeypatch):
     assert "2408" in batch_calls[0]["message"]
 
 
+def test_batch_excludes_pattern_being_expired_in_same_run(seeded_db, monkeypatch):
+    """Pattern crossing max_alert_age_days must NOT appear in today's digest.
+
+    The old order built the digest from candidates first and ran
+    apply_expiry afterward, so a pattern whose final persisted state
+    was 'expired' could still be advertised in the Telegram message.
+    The fix filters expired keys before the digest is built.
+    """
+    from twstock_screener.db import get_connection
+
+    con = get_connection(seeded_db)
+    con.execute("DELETE FROM alert_state_current")
+    very_old = (date(2026, 5, 7) - timedelta(days=60)).isoformat()
+    con.execute(
+        "INSERT INTO alert_state_current "
+        "(stock_id, pattern, first_seen, last_seen, last_score, peak_score, status) "
+        "VALUES ('2408', 'w_bottom', ?, ?, 0.55, 0.55, 'active')",
+        (very_old, very_old),
+    )
+    con.close()
+
+    fake_detector = MagicMock()
+    fake_detector.pattern_id = "w_bottom"
+    fake_detector.confidence_weight = 1.0
+    fake_detector.detect = MagicMock(
+        return_value=MagicMock(matched=True, fit_score=0.6)
+    )
+    monkeypatch.setattr(analyze, "ALL_DETECTORS", [fake_detector])
+    monkeypatch.setattr(analyze, "composite_score", lambda *_a, **_kw: 0.6)
+
+    settings = Settings(
+        telegram_bot_token="tok",
+        telegram_chat_id="12345",
+        db_path=seeded_db,
+        max_alert_age_days=30,
+    )
+
+    sent_alerts: list[dict] = []
+
+    def fake_send_alert(
+        db_path,
+        chat_id,
+        message,
+        run_date,
+        stock_id,
+        pattern,
+        transition,
+        bot_token=None,
+    ):
+        sent_alerts.append(
+            {
+                "transition": transition,
+                "message": message,
+                "stock_id": stock_id,
+            }
+        )
+        return True
+
+    monkeypatch.setattr(analyze, "send_alert", fake_send_alert)
+
+    analyze.run_analysis(settings, today=date(2026, 5, 7), dry_run=False)
+
+    batch_calls = [s for s in sent_alerts if s["transition"] == "batch_summary"]
+    assert batch_calls == [], (
+        "expired pattern (60 days old) leaked into digest: "
+        f"{batch_calls}"
+    )
+
+
 def test_no_batch_when_no_candidates(seeded_db, monkeypatch):
     """Empty candidate lists must NOT push (preserves silence on dead days)."""
     no_match_detector = MagicMock()
