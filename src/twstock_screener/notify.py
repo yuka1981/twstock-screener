@@ -1,3 +1,5 @@
+import logging
+import re
 import sqlite3
 import time
 from datetime import date
@@ -5,11 +7,51 @@ from pathlib import Path
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
+_BODY_LOG_LIMIT = 500
+
+# Telegram bot tokens are <bot_id>:<auth> where bot_id is digits and auth
+# is a URL-safe base64ish string (≥30 chars). Catch any "bot<token>"
+# segment shape, regardless of which token the caller passed in — covers
+# error messages from chained libraries or proxies that may stringify a
+# different bot URL than the one this process owns.
+_TELEGRAM_TOKEN_PATTERN = re.compile(
+    r"bot[0-9]{6,15}(?::|%3[Aa])[A-Za-z0-9_-]{30,}"
+)
+
 
 def build_idempotency_key(
     run_date: date, stock_id: str, pattern: str, transition: str
 ) -> str:
     return f"{run_date.isoformat()}|{stock_id}|{pattern}|{transition}"
+
+
+def _redact_token(text: str, token: str) -> str:
+    """Strip the bot token from any string before it reaches a log sink.
+
+    Layered defense:
+    1. Exact-match replace of the caller's token (covers raw-URL form
+       and bare-token form in JSON/repr output).
+    2. URL-percent-encoded variant of the colon separator — proxies and
+       log forwarders sometimes normalize ``:`` to ``%3A`` before the
+       string reaches a logger.
+    3. Regex fallback for any ``bot<id>:<auth>`` shape, so even an error
+       string carrying a *different* token (e.g. from a wrapped library)
+       cannot leak. This is the last line of defense; it does not depend
+       on the caller-supplied token matching exactly.
+    """
+    if not text:
+        return text
+    if token:
+        text = text.replace(token, "***")
+        # Cover :→%3A normalization. Apply both cases since RFC 3986
+        # treats them as equivalent but loggers preserve whichever form
+        # they received.
+        if ":" in token:
+            text = text.replace(token.replace(":", "%3A"), "***")
+            text = text.replace(token.replace(":", "%3a"), "***")
+    return _TELEGRAM_TOKEN_PATTERN.sub("bot***", text)
 
 
 def _post_telegram(token: str, chat_id: str, message: str) -> bool:
@@ -20,8 +62,20 @@ def _post_telegram(token: str, chat_id: str, message: str) -> bool:
             resp = httpx.post(url, json=payload, timeout=10.0)
             if resp.status_code == 200:
                 return True
-        except httpx.HTTPError:
-            pass
+            body = _redact_token(resp.text or "", token)[:_BODY_LOG_LIMIT]
+            logger.warning(
+                "telegram POST returned status=%d body=%r (attempt %d/2)",
+                resp.status_code,
+                body,
+                attempt,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "telegram POST raised %s: %s (attempt %d/2)",
+                type(exc).__name__,
+                _redact_token(str(exc), token),
+                attempt,
+            )
         if attempt == 1:
             time.sleep(2.0)
     return False
