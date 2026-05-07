@@ -37,7 +37,14 @@ def send_alert(
     transition: str,
     bot_token: str | None = None,
 ) -> bool:
-    """Record a transition (idempotent) and optionally POST to Telegram."""
+    """Record a transition (idempotent) and optionally POST to Telegram.
+
+    When the idempotency key already exists with ``ok=1``, the row is
+    treated as terminal and no Telegram send is attempted. When it
+    exists with ``ok=0`` (a prior attempt failed transiently), a same-
+    day rerun retries the send so a momentary network blip cannot
+    silently swallow the day's digest.
+    """
     key = build_idempotency_key(run_date, stock_id, pattern, transition)
     con = sqlite3.connect(str(db_path), timeout=30.0)
     con.execute("PRAGMA foreign_keys=ON")
@@ -48,9 +55,20 @@ def send_alert(
             "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
             (key, run_date.isoformat(), stock_id, pattern, transition, chat_id, message),
         )
-        if cur.rowcount == 0:
-            con.commit()
-            return False
+        is_retry = cur.rowcount == 0
+        if is_retry:
+            existing = con.execute(
+                "SELECT ok FROM notification_log WHERE idempotency_key=?", (key,)
+            ).fetchone()
+            if existing is None or existing[0] == 1:
+                con.commit()
+                return False
+            if not bot_token:
+                # Row exists with ok=0 from a prior telegram attempt and
+                # this caller is in log-only mode — we cannot meaningfully
+                # flip ok without actually sending. Leave it as-is.
+                con.commit()
+                return False
         if not bot_token:
             con.execute(
                 "UPDATE notification_log SET ok=1 WHERE idempotency_key=?", (key,)

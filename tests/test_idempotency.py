@@ -64,3 +64,43 @@ def test_log_only_mode_skips_telegram(db):
     con = get_connection(db)
     row = con.execute("SELECT ok FROM notification_log").fetchone()
     assert row["ok"] == 1
+
+
+def test_same_day_retry_after_transient_telegram_failure(db):
+    """A failed first attempt must be retriable on the same day.
+
+    The original idempotency contract treated any existing key as
+    terminal, so a single transient network blip silently lost that
+    day's digest. The retry path must re-invoke Telegram when the
+    stored row is ok=0 and flip it to ok=1 on success.
+    """
+    fail_then_succeed = MagicMock(side_effect=[False, True])
+    with patch("twstock_screener.notify._post_telegram", fail_then_succeed):
+        ok1 = send_alert(db, "1", "msg", date(2026, 4, 28), "2330", "m_top",
+                         "new_active", bot_token="tok")
+        ok2 = send_alert(db, "1", "msg", date(2026, 4, 28), "2330", "m_top",
+                         "new_active", bot_token="tok")
+    assert ok1 is False
+    assert ok2 is True
+    assert fail_then_succeed.call_count == 2
+    con = get_connection(db)
+    row = con.execute("SELECT ok FROM notification_log").fetchone()
+    assert row["ok"] == 1
+
+
+def test_log_only_does_not_promote_failed_telegram_row(db):
+    """Log-only retry of a previously-failed telegram row must NOT mark ok=1.
+
+    Otherwise the operator could inadvertently mask a real failure by
+    invoking the function in a different mode after the fact.
+    """
+    fake_fail = MagicMock(return_value=False)
+    with patch("twstock_screener.notify._post_telegram", fake_fail):
+        send_alert(db, "1", "msg", date(2026, 4, 28), "2330", "m_top",
+                   "new_active", bot_token="tok")
+    ok2 = send_alert(db, "1", "msg", date(2026, 4, 28), "2330", "m_top",
+                     "new_active", bot_token=None)
+    assert ok2 is False
+    con = get_connection(db)
+    row = con.execute("SELECT ok FROM notification_log").fetchone()
+    assert row["ok"] == 0
