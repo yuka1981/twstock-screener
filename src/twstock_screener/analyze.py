@@ -237,8 +237,15 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         )
         if ok:
             fresh_transitions += 1
-    if fresh_transitions > 0:
-        send_alert(
+    # Always push the daily digest when any candidate is on the lists.
+    # Once a pattern enters active state, REFRESHED days would otherwise
+    # leave the user with zero Telegram visibility for that signal until
+    # invalidation/expiry — defeats the purpose of a daily screener.
+    # Per-day idempotency on (run_date, "*", "*", "batch_summary") still
+    # protects against duplicate sends from same-day re-runs.
+    batch_sent = False
+    if sells or buys or boxes:
+        batch_sent = send_alert(
             settings.db_path, chat_id, batch_msg, today,
             stock_id="*", pattern="*", transition="batch_summary",
             bot_token=token,
@@ -255,8 +262,10 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
             bot_token=token,
         )
 
-    logger.info("done. batch_pushed=%d invalidated=%d",
-                1 if fresh_transitions > 0 else 0, len(invalidations))
+    logger.info(
+        "done. batch_pushed=%d fresh_transitions=%d invalidated=%d",
+        1 if batch_sent else 0, fresh_transitions, len(invalidations),
+    )
     return 0
 
 
