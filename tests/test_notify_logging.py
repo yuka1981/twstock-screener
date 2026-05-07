@@ -141,3 +141,53 @@ def test_post_telegram_redacts_token_when_exception_embeds_url(monkeypatch, capl
     assert secret_token not in caplog.text, "bot token leaked via stringified exception"
     assert "ConnectError" in caplog.text
     assert "***" in caplog.text
+
+
+def test_post_telegram_redacts_url_encoded_token_in_body(monkeypatch, caplog):
+    """Proxy/log-forwarder may percent-encode the colon — redaction must catch :→%3A."""
+    secret_token = "8521731131:THIS_IS_A_SECRET_TEST_TOKEN_NOT_REAL"
+    encoded_form = secret_token.replace(":", "%3A")
+    body = (
+        '{"ok":false,"error_code":401,"description":'
+        f'"Unauthorized: bot{encoded_form}/sendMessage rejected"}}'
+    )
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_a, **_kw: SimpleNamespace(status_code=401, text=body),
+    )
+    monkeypatch.setattr("twstock_screener.notify.time.sleep", lambda _s: None)
+
+    with caplog.at_level(logging.DEBUG, logger="twstock_screener.notify"):
+        _post_telegram(secret_token, "12345", "msg")
+
+    assert encoded_form not in caplog.text, "URL-encoded token form leaked"
+    assert secret_token not in caplog.text
+    assert "401" in caplog.text
+
+
+def test_post_telegram_redacts_unrelated_bot_token_via_pattern(monkeypatch, caplog):
+    """Pattern fallback must scrub any bot<id>:<auth> shape, not just the caller's token.
+
+    A wrapped HTTP library can include a *different* bot URL in its
+    error message (e.g., a webhook-relay middleware). Exact-match
+    redaction would not catch it; the regex pattern must.
+    """
+    own_token = "8521731131:THIS_IS_A_SECRET_TEST_TOKEN_NOT_REAL"
+    third_party_token = "1234567890:ANOTHER_LIBRARY_BOT_TOKEN_FORTY_CHARS_OK"
+
+    def raise_with_chained_url(*_a, **_kw):
+        raise httpx.ConnectError(
+            f"upstream proxy failed: cannot reach bot{third_party_token}/getUpdates"
+        )
+
+    monkeypatch.setattr(httpx, "post", raise_with_chained_url)
+    monkeypatch.setattr("twstock_screener.notify.time.sleep", lambda _s: None)
+
+    with caplog.at_level(logging.DEBUG, logger="twstock_screener.notify"):
+        _post_telegram(own_token, "12345", "msg")
+
+    assert third_party_token not in caplog.text, (
+        "third-party bot token leaked — pattern fallback failed"
+    )
+    assert "bot***" in caplog.text
