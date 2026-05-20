@@ -1,15 +1,85 @@
 import logging
 import re
+import socket
 import sqlite3
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _BODY_LOG_LIMIT = 500
+_TELEGRAM_HOST = "api.telegram.org"
+# Cloudflare DoH endpoint reached by IP, so it survives DNS hijacking of
+# normal recursive resolvers (corporate networks sometimes sinkhole
+# api.telegram.org to a private IP that refuses TCP 443).
+_DOH_URL = "https://1.1.1.1/dns-query"
+_DOH_CACHE_TTL = 300.0
+_dns_pin_lock = threading.Lock()
+_doh_cache: tuple[str, float] | None = None
+
+
+def _doh_resolve_a(host: str, timeout: float = 5.0) -> str | None:
+    """Resolve a single A record via Cloudflare DoH-over-IP.
+
+    Returns None on any failure so the caller can fall back to system DNS.
+    """
+    try:
+        resp = httpx.get(
+            _DOH_URL,
+            params={"name": host, "type": "A"},
+            headers={"accept": "application/dns-json"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        for ans in resp.json().get("Answer", []):
+            if ans.get("type") == 1 and ans.get("data"):
+                return str(ans["data"])
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        logger.warning("DoH lookup failed for %s: %s", host, exc)
+    return None
+
+
+def _get_telegram_ip() -> str | None:
+    """Return a cached or freshly-resolved A record for api.telegram.org."""
+    global _doh_cache
+    now = time.time()
+    if _doh_cache is not None and _doh_cache[1] > now:
+        return _doh_cache[0]
+    ip = _doh_resolve_a(_TELEGRAM_HOST)
+    if ip is not None:
+        _doh_cache = (ip, now + _DOH_CACHE_TTL)
+    return ip
+
+
+@contextmanager
+def _pinned_dns(host: str, ip: str) -> Iterator[None]:
+    """Redirect ``getaddrinfo(host, ...)`` to a pinned IP for the block.
+
+    Scoped monkey-patch so other DNS lookups in the process (TWSE
+    holiday endpoint, Google Drive backup) are unaffected. The lock
+    keeps concurrent callers from clobbering each other's original
+    reference.
+    """
+    with _dns_pin_lock:
+        orig = socket.getaddrinfo
+
+        def patched(h: Any, *args: Any, **kwargs: Any) -> Any:
+            if h == host:
+                return orig(ip, *args, **kwargs)
+            return orig(h, *args, **kwargs)
+
+        socket.getaddrinfo = patched  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = orig  # type: ignore[assignment]
 
 # Telegram bot tokens are <bot_id>:<auth> where bot_id is digits and auth
 # is a URL-safe base64ish string (≥30 chars). Catch any "bot<token>"
@@ -57,27 +127,35 @@ def _redact_token(text: str, token: str) -> str:
 def _post_telegram(token: str, chat_id: str, message: str) -> bool:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": message, "parse_mode": "MarkdownV2"}
-    for attempt in (1, 2):
+    attempts = 3
+    for attempt in range(1, attempts + 1):
         try:
-            resp = httpx.post(url, json=payload, timeout=10.0)
+            pinned_ip = _get_telegram_ip()
+            if pinned_ip is not None:
+                with _pinned_dns(_TELEGRAM_HOST, pinned_ip):
+                    resp = httpx.post(url, json=payload, timeout=15.0)
+            else:
+                resp = httpx.post(url, json=payload, timeout=15.0)
             if resp.status_code == 200:
                 return True
             body = _redact_token(resp.text or "", token)[:_BODY_LOG_LIMIT]
             logger.warning(
-                "telegram POST returned status=%d body=%r (attempt %d/2)",
+                "telegram POST returned status=%d body=%r (attempt %d/%d)",
                 resp.status_code,
                 body,
                 attempt,
+                attempts,
             )
         except httpx.HTTPError as exc:
             logger.warning(
-                "telegram POST raised %s: %s (attempt %d/2)",
+                "telegram POST raised %s: %s (attempt %d/%d)",
                 type(exc).__name__,
                 _redact_token(str(exc), token),
                 attempt,
+                attempts,
             )
-        if attempt == 1:
-            time.sleep(2.0)
+        if attempt < attempts:
+            time.sleep(2.0 * attempt)
     return False
 
 
