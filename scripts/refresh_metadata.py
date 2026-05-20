@@ -51,9 +51,9 @@ def refresh_stocks_list(db_path: Path) -> int:
     twse_codes = {
         code: meta
         for code, meta in twstock.codes.items()
-        if meta.market == "上市" and meta.type == "股票"
+        if meta.market == "上市" and meta.type in ("股票", "ETF")
     }
-    logger.info("upserting %d TWSE stocks", len(twse_codes))
+    logger.info("upserting %d TWSE instruments (stocks + ETFs)", len(twse_codes))
     progress = ProgressReporter(
         total=len(twse_codes), label="metadata", log_every=100
     )
