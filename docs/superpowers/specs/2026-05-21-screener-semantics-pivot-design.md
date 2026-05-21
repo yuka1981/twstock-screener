@@ -22,6 +22,16 @@ This spec amends the base spec's §3, §4, §10, §11. New base-spec sections ar
 
 **Section numbering convention in this document:** Each chapter heading shows both base-spec reference and this-doc local number, formatted as `## Base-spec §X — Description (this doc §Y)`. Use base-spec references for cross-document citation; use this-doc local numbers for navigating this document.
 
+### Amendment 2026-05-21-A — Digest-layer cross-day signals
+
+**Trigger:** Coupling-point-4 verification (per §8.3 step 2 prerequisite) discovered the actual `analyze.py` → `notify.py` mechanism diverges from the spec's anticipated (4a)/(4b) shapes. The digest layer reads `alert_state_current` for two cross-day behaviors not covered in the original §7.1 / §7.2 design: age-based filtering of long-persistent patterns, and invalidation messages for patterns that disappear.
+
+**Scope of amendment:** §7.1 (add age-filtering + departures section), §7.2 (relax "zero behavioral reads" to clarify detector-vs-digest layer boundary), §2.2 (acknowledge departures-as-informational as distinct from FSM "invalidated"), §8.2 (mark coupling point 4 resolved).
+
+**Why amendment rather than ad-hoc patch:** The original spec implicitly assumed digest layer was a thin presentation tier downstream of detector output. Verification revealed digest layer has its own cross-day business logic with real user value. Preserving that value under screener semantics requires explicit spec coverage, not implementation-time workarounds.
+
+**Coupling-category lesson** (captured for future pre-mortems): enumeration must include user-facing output paths that derive signals from cross-day state, not just detector and data layers.
+
 ---
 
 ## Base-spec §3 — Chart-card percentages re-framed (this doc §1)
@@ -67,6 +77,8 @@ The state machine (`active` → `invalidated` / `expired` via `alert_state_curre
 
 **Code paths to repurpose:**
 - `alert_state_current` table itself stays (option (b) per base-spec §10.1 / this doc §7.2 audit-log repurpose).
+
+**Note on "invalidated" (amendment 2026-05-21-A):** §2.2's deletion of the FSM "invalidated" state refers to detector-layer state transitions (a pattern that was tracked as active and then marked invalidated by FSM rules). It does **not** prohibit the digest layer from informing users when a previously-surfaced pattern is no longer present. That user-visible function is preserved under screener semantics as the **departures section** in §7.1 — semantically distinct from the deleted FSM "invalidated" state and recorded with a different `transition` value (see §7.2 amendment).
 
 ### Base-spec §4.4 NEW — Stateless detector invariant (this doc §2.3)
 
@@ -187,14 +199,33 @@ The original v2 footnote should be deleted from base spec or annotated `(superse
 
 **Definition:** Each daily `analyze` run produces a **snapshot** = the set of `(stock_id, pattern)` pairs where the pattern is present in today's OHLC data, ranked per §2.4, top-N capped per category (sell / buy / box).
 
-**Removed concepts:**
+**Removed concepts (from FSM-era):**
 - "First-day-active" — every day with pattern presence is equally valid for surfacing.
 - "Expired" — patterns either present today or not. No 30-day window.
-- "Invalidated" — replaced by "not present today". Recomputed fresh, no state to invalidate.
+- "Invalidated" (as FSM state) — replaced by "not present today." Detector layer recomputes fresh, no state to invalidate. See §2.2 note on the distinction between FSM "invalidated" and digest-layer "departures."
 
 **Retained concepts:**
 - Top-N caps per category (digestibility — base spec §7 cap logic survives).
 - Day-level buy/sell conflict filter at detection time (recomputed daily, no state).
+
+**Cross-day digest signals (new under amendment 2026-05-21-A):**
+
+Two behaviors preserved from the FSM-era system are re-anchored under snapshot semantics. Both read `alert_state_current` from the digest layer only — detector layer remains stateless per §2.3.
+
+**(a) Age-based filtering.** Patterns whose continuous presence (per audit log `first_surfaced_date` of the most recent row) exceeds `max_pattern_age_days` are dropped from the surfaced digest. The intent is to prevent stale long-persistent patterns from monopolizing screener attention; fresher signals get surfacing priority.
+
+- The threshold constant `max_pattern_age_days` replaces `max_alert_age_days` and lives in config.
+- Default carries over from current code value; re-derivation against backtest data is out of scope for this amendment.
+- **Reappearance interaction (intentional behavior):** Age is computed from the **most recent** audit-log row's `first_surfaced_date`, not the earliest. A pattern that disappears for ≥1 day and reappears starts a new audit-log row (per §7.2 reappearance behavior), and its age clock resets to that new row's date. **This is intentional**: a pattern that comes and goes carries fresher signal than one that's been static for 90 days continuously. Future maintainers reading `most recent` as a typo for `earliest` would invert the intent.
+- **Edge case acknowledged:** Patterns that flicker on/off due to detector noise (e.g., a borderline geometry that fails on a single noisy day) will reset their age clock on each reappearance. This is accepted behavior. Noise mitigation belongs at the detector layer, not the audit-log layer.
+
+**(b) Departures section.** Each daily digest includes a small section listing `(sid, pattern)` pairs present in yesterday's snapshot but absent from today's. Cap: 5 entries per digest.
+
+- Computed by diffing today's snapshot against the most recent `alert_state_current` rows.
+- Surfaces as 「⚠️ 型態消失」 (pattern departed), framed as informational, not directional.
+- No precision claims (consistent with §1).
+- Written to `notification_log` with `transition='departed'` — distinct from the alert-era `transition='invalidated'` value, preserving historical row queryability across the regime boundary.
+- This replaces the alert-era 「⚠️ 警示解除」 invalidation message. The user-visible function (notifying when a previously-present pattern is gone) is preserved; the framing is updated to screener semantics.
 
 ### DB schema — `alert_state_current` repurposed as audit log (this doc §7.2)
 
@@ -211,7 +242,12 @@ The original v2 footnote should be deleted from base spec or annotated `(superse
 - Disappeared entries (present yesterday, absent today) → no operation. Row remains as historical log.
 - **Reappearance behavior:** If a (sid, pattern) reappears after being absent ≥ 1 day, a new row is INSERTED rather than updating the prior row. This preserves discrete "presence episodes" in the audit log — useful for retrospective analysis of pattern persistence vs. recurrence.
 
-**Read semantics:** **zero behavioral reads.** Digest generation does not query this table. It exists only for retrospective analysis.
+**Read semantics (revised under amendment 2026-05-21-A):**
+
+- **Detector layer:** MUST NOT read `alert_state_current`. Preserves §2.3 stateless detector invariant.
+- **Digest layer:** MAY read `alert_state_current` for cross-day derived signals (age filtering per §7.1(a), departure detection per §7.1(b)).
+
+The original "zero behavioral reads" framing in the pre-amendment spec was scoped to prevent detector state leakage. It overreached in disallowing legitimate digest-layer use of the audit log. The corrected boundary is: detectors recompute fresh from OHLC; digest layer may consult cross-day audit log to enrich presentation logic without violating detector statelessness.
 
 **Retention:** 1 year rolling, computed in **Asia/Taipei** timezone (matches TWSE trading day boundaries). Archive or drop aged rows. Verify alignment with any existing retention policy (none currently specified in base spec — set this as the canonical reference if no conflict).
 
@@ -259,7 +295,7 @@ Code paths and data stores that depend on FSM semantics. Each is a migration con
 | 1 | `walk_forward_emitted` (backtest.py:135-200) `state_active` dict | Confirmed | Replace with daily-snapshot emit-set definition |
 | 2 | Throwaway tooling (`/tmp/cached_tune.py:163-188`) `evaluate_combo` FSM | Confirmed (out of tree) | If any equivalent lands in tree, same treatment |
 | 3 | `analyze.apply_detection` FSM state transitions | Confirmed | Replace with snapshot-diff writer (§7.2) |
-| 4 | Telegram digest dedup mechanism (filters on `state='new_active'` OR consumes apply_detection return) | Suspected — moderate-high; mechanism TBD | Verify exact mechanism (4a vs 4b) during code-side review of `analyze.py`+`notify.py`. Replacement is identical regardless: "digest = today's top-N from snapshot" |
+| 4 | Telegram digest dedup mechanism (filters on `state='new_active'` OR consumes apply_detection return) | **Resolved — actual mechanism is (4c): digest layer reads `alert_state_current` for age filtering + invalidation messages, neither matching (4a) nor (4b).** | Amendment 2026-05-21-A preserves both behaviors under snapshot semantics (§7.1(a) age filtering, §7.1(b) departures section). |
 | 5 | Same-stock buy+sell conflict resolution | Confirmed at detection (per-day, stateless). Verify-during-implementation: any extension across days via state table | If cross-day extension exists, drop it; snapshot model handles per-day |
 | 6 | `EXPIRY_DAYS=30` constant | Confirmed (2 sites in backtest.py) | Delete unless hybrid (§7.3) adopts it as lookback window |
 | 7 | Historical backtest results storage (DB tables, JSON archives, monitoring dashboard inputs) | Verify-during-implementation | Mark all pre-transition results as "legacy measurement regime, not comparable to current numbers". Archive separately or annotate in-place. Prevents misleading trend graphs across the regime boundary |
