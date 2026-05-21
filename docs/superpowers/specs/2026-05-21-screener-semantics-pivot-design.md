@@ -28,6 +28,14 @@ This spec amends the base spec's §3, §4, §10, §11. New base-spec sections ar
 
 **Scope of amendment:** §7.1 (add age-filtering + departures section), §7.2 (relax "zero behavioral reads" to clarify detector-vs-digest layer boundary), §2.2 (acknowledge departures-as-informational as distinct from FSM "invalidated"), §8.2 (mark coupling point 4 resolved).
 
+### Amendment 2026-05-21-B — Day semantics clarification
+
+**Trigger:** Plan-write (`docs/superpowers/plans/2026-05-21-screener-semantics-pivot-plan.md`) surfaced ambiguity in §7.2 reappearance behavior phrasing ("absent ≥ 1 day"). Trading-day interpretation aligns with codebase `is_trading_day()` semantics and the Mon-Fri cron schedule; calendar-day interpretation would produce false departure entries every Monday for patterns continuously present Friday → Monday.
+
+**Scope of amendment:** §7.2 — add explicit "Day semantics" paragraph after reappearance behavior.
+
+**Decision encoded:** trading day, not calendar day.
+
 **Why amendment rather than ad-hoc patch:** The original spec implicitly assumed digest layer was a thin presentation tier downstream of detector output. Verification revealed digest layer has its own cross-day business logic with real user value. Preserving that value under screener semantics requires explicit spec coverage, not implementation-time workarounds.
 
 **Coupling-category lesson** (captured for future pre-mortems): enumeration must include user-facing output paths that derive signals from cross-day state, not just detector and data layers.
@@ -241,6 +249,8 @@ Two behaviors preserved from the FSM-era system are re-anchored under snapshot s
 - Existing entries (in both days) → UPDATE `last_surfaced_date`.
 - Disappeared entries (present yesterday, absent today) → no operation. Row remains as historical log.
 - **Reappearance behavior:** If a (sid, pattern) reappears after being absent ≥ 1 day, a new row is INSERTED rather than updating the prior row. This preserves discrete "presence episodes" in the audit log — useful for retrospective analysis of pattern persistence vs. recurrence.
+
+**Day semantics (amendment 2026-05-21-B):** All references to "day" in §7.1 cross-day signals and §7.2 reappearance behavior mean **trading day** (per `is_trading_day()` semantics used elsewhere in the codebase), not calendar day. The `analyze` cron runs Mon-Fri; weekends and TWSE holidays produce no snapshot. A pattern present on Friday's snapshot and present on the following Monday's snapshot is **continuously present** (no new audit-log row, no reappearance, no departure entry), not "absent for 3 calendar days."
 
 **Read semantics (revised under amendment 2026-05-21-A):**
 
