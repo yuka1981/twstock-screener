@@ -50,9 +50,9 @@ Items the plan assumes that are not fully specified in the spec — confirm duri
 
 3. **`max_pattern_age_days` default carries over from `max_alert_age_days`.** Current default is 30 (config.py:16). Spec §7.1(a) defers re-derivation to "out of scope for this amendment" — 30 stays.
 
-4. **Snapshot writer batches diffs against yesterday's snapshot only**, not arbitrary "most recent" snapshot. Spec §7.2 reappearance behavior reads "absent ≥ 1 day" — strict adjacency. If a weekend or holiday separates two analyze runs, the writer treats the prior trading day as "yesterday" for diff purposes. Confirm during step 2 implementation.
+4. **`SettingsConfigDict.extra="ignore"`** (config.py:21) means stale env vars (e.g., `TWSTOCK_SCORE_THRESHOLD_ACTIVE` left in `.env` after config field deletion) won't cause startup failures. Old env vars become inert; document removal in step 2's PR description but no production action required.
 
-5. **`SettingsConfigDict.extra="ignore"`** (config.py:21) means stale env vars (e.g., `TWSTOCK_SCORE_THRESHOLD_ACTIVE` left in `.env` after config field deletion) won't cause startup failures. Old env vars become inert; document removal in step 2's PR description but no production action required.
+*(Note: original plan-write surfaced a 5th assumption about trading-day vs calendar-day adjacency for snapshot diffs. That ambiguity was escalated to spec amendment 2026-05-21-B per the spec-gap protocol; "day = trading day" is now explicit in spec §7.2 and no longer requires plan-level assumption.)*
 
 ---
 
@@ -135,6 +135,7 @@ git push -u origin feat/screener-semantics-pivot
 
 **Risk / contingency:**
 - **Risk: schema migration on existing dev DBs.** Existing developers' local DBs have FSM-era `alert_state_current` rows. Migration script must handle them gracefully (carry `first_seen` forward as `first_surfaced_date` per assumption 1). Mitigation: write migration as idempotent — re-running on a snapshot-era schema is a no-op. Test against a freshly-cloned + backfilled DB before merge.
+- **Risk: mixed-regime semantic artifact in migrated rows.** Migration carries `first_seen` → `first_surfaced_date` as best-effort historical preservation. The two fields are not strictly semantically equivalent: alert-era `first_seen` was reset by FSM expiry/invalidate logic; screener-era `first_surfaced_date` is reset only by snapshot-diff reappearance. Pre-cutover rows therefore carry FSM-regime semantics under a screener-regime column name. Divergence is bounded to read-only audit data post-deploy (spec §7.2 reads are zero-behavioral on detector layer, audit-log-only on digest layer). Acceptable; document in PR description so future analysts querying pre-cutover rows understand the regime boundary.
 - **Risk: `analyze.py` rewrite is large.** ~280 lines, multiple cross-day logic concerns. Mitigation: rewrite as TDD per sub-area (snapshot generation → departures detection → age filter → digest assembly). Each sub-area gets its own failing test before its code lands.
 - **Risk: test coverage drift.** Deleting FSM tests without replacement reduces overall coverage. Mitigation: enumerate which tests are deleted (FSM-specific) vs rewritten (snapshot-relevant) in the PR description; CI coverage gate should not regress.
 - **Contingency on Small Gap escalation:** if execution surfaces a Large Gap (per spec-amendment-protocol), halt phase 2 and report. Amendment 2026-05-21-B may be required before resuming.
