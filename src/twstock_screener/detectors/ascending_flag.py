@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 
+from twstock_screener.detectors.atr import compute_atr
 from twstock_screener.detectors.base import DetectorResult
 
 
@@ -59,7 +60,8 @@ class AscendingFlagDetector:
         if last_close <= upper_at_last:
             return self._no(df)
 
-        break_strength = float(np.clip((last_close - upper_at_last) / upper_at_last / 0.02, 0.0, 1.0))
+        atr_20 = compute_atr(df, period=14)
+        break_strength = float(np.clip((last_close - upper_at_last) / atr_20, 0.0, 1.0)) if atr_20 > 0 else 0.0
         parallelism = 1.0 - slope_diff_ratio / 0.30
         fit = float(np.clip(parallelism * break_strength, 0.0, 1.0))
         return DetectorResult(

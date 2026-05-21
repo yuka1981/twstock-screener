@@ -1,19 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from twstock_screener.detectors.atr import compute_atr
 from twstock_screener.detectors.base import DetectorResult
-
-
-def _atr(df: pd.DataFrame, period: int = 14) -> float:
-    high = df["high"].to_numpy(dtype=float)
-    low = df["low"].to_numpy(dtype=float)
-    close_prev = df["close"].shift(1).fillna(df["close"]).to_numpy(dtype=float)
-    tr = np.maximum.reduce([
-        high - low,
-        np.abs(high - close_prev),
-        np.abs(low - close_prev),
-    ])
-    return float(tr[-period:].mean()) if len(tr) >= period else float(tr.mean())
 
 
 class RectangleDetector:
@@ -41,7 +30,7 @@ class RectangleDetector:
         if upper_touches < 3 or lower_touches < 3:
             return self._no(df)
 
-        atr = _atr(df, period=14)
+        atr = compute_atr(df, period=14)
         if atr / mean_close > 0.015:
             return self._no(df)
 

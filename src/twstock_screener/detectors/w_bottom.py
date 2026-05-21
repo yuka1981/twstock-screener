@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 
+from twstock_screener.detectors.atr import compute_atr
 from twstock_screener.detectors.base import DetectorResult
 from twstock_screener.pivot import find_pivots
 
@@ -45,7 +46,8 @@ class WBottomDetector:
         if last_close <= neckline:
             return self._no(df)
 
-        break_strength = float(np.clip((last_close - neckline) / neckline / 0.02, 0.0, 1.0))
+        atr_20 = compute_atr(df, period=14)
+        break_strength = float(np.clip((last_close - neckline) / atr_20, 0.0, 1.0)) if atr_20 > 0 else 0.0
         symmetry = 1.0 - depth_diff / 0.03
         fit = float(np.clip(symmetry * break_strength, 0.0, 1.0))
 

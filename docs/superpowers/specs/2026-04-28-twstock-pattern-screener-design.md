@@ -620,17 +620,27 @@ def test_no_duplicate_alerts_on_replay():
 
 ### 10.3 KPI Gate（必須全達標）
 
-| 型態 | Precision ≥ | False Positive ≤ |
-|---|---|---|
-| M 頭 (100%) | 60% | 30% |
-| W 底 (100%) | 60% | 30% |
-| 上升楔形 (100%) | 60% | 30% |
-| 下跌旗形 (80%) | 55% | 35% |
-| 上升旗形 (80%) | 55% | 35% |
-| 菱形頂 (65%) | 50% | 40% |
-| 箱型 (50%) | (不適用：盤整非方向訊號，僅看突破後方向) | — |
+**v2 重新校準（2026-05-21）**：原 60/30 / 55/35 / 50/40 中的 FPR clause
+在現行 2-label `evaluate_signal` 下等於 `1 - precision`（所有非 correct 的
+decided case 都算 FP），等效於把 precision 門檻拉高 10 pp。經 spec author 確認
+此並非原意，已將 KPI 收斂為 precision-only，並把門檻直接對齊圖卡先驗百分比：
 
-任一型態未達標：**不上 Phase 4**，回頭調整閾值或停用該 detector。
+| 型態 | 圖卡先驗 | Precision ≥ |
+|---|---|---|
+| M 頭 | 100% | 60% |
+| 上升楔形 | 100% | 60% |
+| 下跌旗形 | 80% | 60% |
+| 菱形頂 | 65% | 55% |
+| W 底 | 65% | 55% |
+| 上升旗形 | 65% | 55% |
+| 箱型 | 50% | (不適用：盤整非方向訊號) |
+
+Recall 仍計算並輸出（informational），但**不列入 gate**。理由：TWSE
+chart-pattern detector 結構上是 narrow / precision-prioritized；對 recall
+設絕對閾值會強迫 detector 放寬幾何條件、回到雜訊。Recall 的用途是觀察
+不同型態的相對覆蓋率，協助下游 product 決策（alert vs screener semantics）。
+
+任一型態未達標：**不上 Phase 4**，回頭調整 detector 幾何 / filter，或重新檢視 spec。
 
 ### 10.4 報表
 

@@ -26,7 +26,16 @@ class BacktestResult:
     incorrect: int
     inconclusive: int
     precision: float = 0.0
+    # false_positive_rate is mechanically 1 - precision under the
+    # 2-label evaluate_signal scheme (all non-correct decided cases are FP).
+    # Retained for backwards compatibility with run_backtest.py reports but
+    # NO LONGER USED for KPI gating — see spec §10.3 (v2 calibration).
     false_positive_rate: float = 0.0
+    # Recall: TP / (count of ground-truth events in window, regardless of
+    # whether any detector fired). Informational only — not gated.
+    # Ground-truth event = (sid, day) with fwd_N_return in expected direction.
+    ground_truth_events: int = 0
+    recall: float = 0.0
     months: list[str] = field(default_factory=list)
 
 
@@ -46,6 +55,41 @@ def evaluate_signal(
     if direction == "buy":
         return {"correct": fwd >= threshold, "forward_return": fwd}
     return {"correct": fwd <= -threshold, "forward_return": fwd}
+
+
+def count_ground_truth_events(
+    histories: dict[str, pd.DataFrame],
+    start: date,
+    end: date,
+    direction: str,
+    forward_days: int = 20,
+    threshold: float = 0.05,
+) -> int:
+    """Count (stock, date) pairs in the window whose forward N-day return
+    matches the expected direction. Used as the recall denominator —
+    "how many opportunities existed for the detector to find".
+
+    direction: 'sell' counts drops >= threshold; 'buy' counts rises >= threshold.
+    """
+    if direction not in ("sell", "buy"):
+        return 0
+    count = 0
+    for df in histories.values():
+        dates = df["date"].dt.date.to_numpy()
+        closes = df["close"].to_numpy(dtype=float)
+        for i, d in enumerate(dates):
+            if not (start <= d <= end):
+                continue
+            if i + forward_days >= len(closes):
+                continue
+            if closes[i] <= 0:
+                continue
+            fwd = closes[i + forward_days] / closes[i] - 1.0
+            if direction == "sell" and fwd <= -threshold:
+                count += 1
+            elif direction == "buy" and fwd >= threshold:
+                count += 1
+    return count
 
 
 def _load_stock_history(db_path: Path, stock_id: str) -> pd.DataFrame:
@@ -155,6 +199,9 @@ def walk_forward_emitted(
         for k in expired:
             state_history.setdefault(k, []).append(state_active.pop(k))
 
+    gt_sell = count_ground_truth_events(histories, start, end, "sell", forward_days)
+    gt_buy = count_ground_truth_events(histories, start, end, "buy", forward_days)
+
     results: dict[str, BacktestResult] = {}
     for det in ALL_DETECTORS:
         pid = det.pattern_id
@@ -167,6 +214,8 @@ def walk_forward_emitted(
             else "buy" if pid in BUY_PATTERNS
             else "neutral"
         )
+        gt = gt_sell if direction_label == "sell" else gt_buy if direction_label == "buy" else 0
+        recall = c["correct"] / gt if gt else 0.0
         results[pid] = BacktestResult(
             pattern=pid,
             direction=direction_label,
@@ -176,5 +225,7 @@ def walk_forward_emitted(
             inconclusive=c["inconclusive"],
             precision=prec,
             false_positive_rate=fpr,
+            ground_truth_events=gt,
+            recall=recall,
         )
     return results

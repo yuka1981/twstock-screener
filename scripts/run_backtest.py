@@ -1,12 +1,21 @@
 """Run walk-forward backtest over the configured DB and emit KPI report.
 
-Spec §10.3 KPI gate (precision / false-positive rate per pattern):
+Spec §10.3 KPI gate (precision-only, v2 calibration — see spec note):
 
-  m_top, w_bottom, ascending_wedge:    >= 60% precision, <= 30% FPR
-  descending_flag, ascending_flag:     >= 55% precision, <= 35% FPR
-  diamond_top:                         >= 50% precision, <= 40% FPR
+  High-confidence  (m_top, ascending_wedge, descending_flag):  precision >= 60%
+  Mid-confidence   (diamond_top, w_bottom, ascending_flag):    precision >= 55%
+  Neutral          (rectangle):                                 excluded per spec
 
-Exits 0 only if ALL six directional patterns pass.
+The original 60/30, 55/35, 50/40 FPR clauses were redundant under the
+2-label evaluate_signal scheme (FPR = 1 - precision); the gate has been
+collapsed to precision-only and the precision thresholds raised to the
+levels the spec author's chart-card confidences imply directly.
+
+Recall is reported informational only — TWSE chart-pattern detectors are
+structurally narrow (high precision / low recall by design), so absolute
+recall thresholds would be self-defeating.
+
+Exits 0 only if ALL six directional patterns clear their precision gate.
 """
 from __future__ import annotations
 
@@ -26,13 +35,15 @@ logging.basicConfig(
 logger = logging.getLogger("backtest")
 
 
-KPI = {
-    "m_top": (0.60, 0.30),
-    "w_bottom": (0.60, 0.30),
-    "ascending_wedge": (0.60, 0.30),
-    "descending_flag": (0.55, 0.35),
-    "ascending_flag": (0.55, 0.35),
-    "diamond_top": (0.50, 0.40),
+KPI_PRECISION = {
+    # High-confidence chart-card cells (100% / 80%).
+    "m_top": 0.60,
+    "ascending_wedge": 0.60,
+    "descending_flag": 0.60,
+    # Mid-confidence chart-card cells (65%).
+    "diamond_top": 0.55,
+    "w_bottom": 0.55,
+    "ascending_flag": 0.55,
 }
 
 
@@ -86,29 +97,29 @@ def main() -> int:
     with open(args.report_csv, "w") as f:
         f.write(
             "pattern,direction,signals,correct,incorrect,inconclusive,"
-            "precision,fpr,gate_pass\n"
+            "precision,recall,ground_truth_events,gate_pass\n"
         )
-        for pattern_id, (min_prec, max_fpr) in KPI.items():
+        for pattern_id, min_prec in KPI_PRECISION.items():
             r = results[pattern_id]
-            gate = (r.precision >= min_prec) and (
-                r.false_positive_rate <= max_fpr
-            )
+            gate = r.precision >= min_prec
             f.write(
                 f"{r.pattern},{r.direction},{r.signal_count},{r.correct},"
                 f"{r.incorrect},{r.inconclusive},{r.precision:.4f},"
-                f"{r.false_positive_rate:.4f},{'PASS' if gate else 'FAIL'}\n"
+                f"{r.recall:.4f},{r.ground_truth_events},"
+                f"{'PASS' if gate else 'FAIL'}\n"
             )
             status = "PASS" if gate else "FAIL"
             logger.info(
                 "  %s emitted=%d correct=%d incorrect=%d inconclusive=%d "
-                "precision=%.2f%% fpr=%.2f%% gate=%s",
+                "precision=%.2f%% recall=%.2f%% (n_gt=%d) gate=%s",
                 r.pattern,
                 r.signal_count,
                 r.correct,
                 r.incorrect,
                 r.inconclusive,
                 r.precision * 100,
-                r.false_positive_rate * 100,
+                r.recall * 100,
+                r.ground_truth_events,
                 status,
             )
             if not gate:

@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 
+from twstock_screener.detectors.atr import compute_atr
 from twstock_screener.detectors.base import DetectorResult
 from twstock_screener.pivot import find_pivots
 
@@ -53,7 +54,8 @@ class DiamondTopDetector:
         if last_close >= lower_proj:
             return self._no(df)
 
-        break_strength = float(np.clip((lower_proj - last_close) / lower_proj / 0.02, 0.0, 1.0))
+        atr_20 = compute_atr(df, period=14)
+        break_strength = float(np.clip((lower_proj - last_close) / atr_20, 0.0, 1.0)) if atr_20 > 0 else 0.0
         fit = float(np.clip(symmetry * break_strength, 0.0, 1.0))
         return DetectorResult(
             matched=True,
