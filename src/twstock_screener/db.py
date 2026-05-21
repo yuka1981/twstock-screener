@@ -34,17 +34,23 @@ CREATE TABLE IF NOT EXISTS holidays (
   fetched_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Snapshot-era audit log per spec 2026-05-21-screener-semantics-pivot-design.md §7.2
+-- (amendment 2026-05-21-A). Multiple rows per (stock_id, pattern) allowed; each row
+-- is one discrete presence episode (reappearance behavior). event_type / event_metadata
+-- reserved for forward-compatible hybrid completion-event extension (§7.3).
 CREATE TABLE IF NOT EXISTS alert_state_current (
-  stock_id        TEXT NOT NULL,
-  pattern         TEXT NOT NULL,
-  first_seen      DATE NOT NULL,
-  last_seen       DATE NOT NULL,
-  last_score      REAL NOT NULL,
-  peak_score      REAL NOT NULL,
-  status          TEXT NOT NULL DEFAULT 'active' CHECK(status='active'),
-  PRIMARY KEY (stock_id, pattern)
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  stock_id             TEXT NOT NULL,
+  pattern              TEXT NOT NULL,
+  first_surfaced_date  DATE NOT NULL,
+  last_surfaced_date   DATE NOT NULL,
+  event_type           TEXT NOT NULL DEFAULT 'surfaced',
+  event_metadata       TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_current_first_seen ON alert_state_current(first_seen);
+CREATE INDEX IF NOT EXISTS idx_alert_state_episode
+  ON alert_state_current(stock_id, pattern, first_surfaced_date);
+CREATE INDEX IF NOT EXISTS idx_alert_state_last_surfaced
+  ON alert_state_current(last_surfaced_date);
 
 CREATE TABLE IF NOT EXISTS alert_history (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,10 +102,54 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     return con
 
 
+def _migrate_alert_state_current_to_snapshot_era(con: sqlite3.Connection) -> None:
+    """Idempotent migration from FSM-era to snapshot-era alert_state_current.
+
+    Pre-cutover rows are preserved with first_seen → first_surfaced_date,
+    last_seen → last_surfaced_date, event_type='surfaced'. FSM scoring columns
+    (last_score, peak_score) and status CHECK constraint are dropped.
+
+    Mixed-regime caveat (plan Phase 2 risk-bullet): alert-era first_seen was
+    reset by FSM expiry/invalidate; screener-era first_surfaced_date is reset
+    only by snapshot-diff reappearance. Pre-cutover rows therefore carry
+    FSM-regime semantics under screener-regime column names. Divergence is
+    bounded to read-only audit data post-deploy.
+    """
+    cols = {r[1] for r in con.execute("PRAGMA table_info(alert_state_current)")}
+    if not cols:
+        return  # fresh DB — CREATE TABLE IF NOT EXISTS in SCHEMA handles it
+    if "event_type" in cols:
+        return  # already migrated
+    con.executescript(
+        """
+        CREATE TABLE alert_state_current_new (
+          id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+          stock_id             TEXT NOT NULL,
+          pattern              TEXT NOT NULL,
+          first_surfaced_date  DATE NOT NULL,
+          last_surfaced_date   DATE NOT NULL,
+          event_type           TEXT NOT NULL DEFAULT 'surfaced',
+          event_metadata       TEXT
+        );
+        INSERT INTO alert_state_current_new
+          (stock_id, pattern, first_surfaced_date, last_surfaced_date, event_type)
+        SELECT stock_id, pattern, first_seen, last_seen, 'surfaced'
+        FROM alert_state_current;
+        DROP TABLE alert_state_current;
+        ALTER TABLE alert_state_current_new RENAME TO alert_state_current;
+        CREATE INDEX IF NOT EXISTS idx_alert_state_episode
+          ON alert_state_current(stock_id, pattern, first_surfaced_date);
+        CREATE INDEX IF NOT EXISTS idx_alert_state_last_surfaced
+          ON alert_state_current(last_surfaced_date);
+        """
+    )
+
+
 def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = get_connection(db_path)
     try:
+        _migrate_alert_state_current_to_snapshot_era(con)
         con.executescript(SCHEMA)
     finally:
         con.close()
