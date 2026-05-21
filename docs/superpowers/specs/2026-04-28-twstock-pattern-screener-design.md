@@ -180,6 +180,8 @@ class Detector(Protocol):
 
 ### 3.3 各型態規則
 
+> ⚠ **Superseded by [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §1: pedagogical only.** The `100%/80%/65%/50%` percentages on each pattern below are chart-card source-tier annotations, not production precision claims. They flow to `confidence_weight` for ranking purposes only and are not surfaced to users.
+
 #### M 頭（雙頂） — 賣 100%
 - **Lookback**: 60 日
 - 找最近兩個 peaks `P1`、`P2`，間距 ∈ [10, 40] 根
@@ -218,6 +220,9 @@ class Detector(Protocol):
 - 對稱下跌旗形：旗桿陡升、旗面雙線負斜率且平行、突破旗面上緣
 
 #### 上升楔形 — 買 100%（依用戶圖解讀）
+
+> ⚠ **Superseded by [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §5: internal use only.** Under screener semantics, ascending_wedge is surfaced as pattern-presence without buy/sell annotation. BUY classification retained internally for `BUY_PATTERNS` set membership + recall measurement only; does not propagate to user-facing digest.
+
 - **Lookback**: 40 日
 - ≥ 4 個交替 pivot
 - 高點線斜率 > 0、低點線斜率 > 高點線（收斂上揚）
@@ -229,6 +234,8 @@ class Detector(Protocol):
 ## 4. 複合分、排序、Dedup
 
 ### 4.1 複合分公式
+
+> ⚠ **Superseded by [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §2.1: sort key only.** `composite_score` no longer functions as a gating threshold; `score_threshold_active` is removed. The formula is retained as a sort input within candidate lists. Per-pattern LF sweet spot ranking replaces gate-based filtering — see screener-pivot spec §2.4.
 
 ```
 composite = fit_score × confidence_weight × liquidity_factor
@@ -243,7 +250,7 @@ liquidity_factor:
 
 > **乘法的取捨**：codex round 1 指出「乘法 = 一票否決」風險。本設計**故意**保留 liquidity 的零閾值（冷門股應該歸零）。`fit_score`、`confidence_weight` 不會接近 0（最低 0.50 × 0.4 = 0.20）所以不會發生意外歸零。
 >
-> **校準計畫（v2）**：walk-forward backtest 跑完後，依各型態實測 precision 重新調整 `confidence_weight`。v1 採用圖卡先驗。
+> **校準計畫（v2）**：walk-forward backtest 跑完後，依各型態實測 precision 重新調整 `confidence_weight`。v1 採用圖卡先驗。 *(Obsolete per [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §6: no precision target to calibrate against under screener semantics.)*
 
 ### 4.2 分組與 Tiebreaker
 
@@ -259,6 +266,8 @@ box_candidates  = [(stock, 'rectangle', score)]
 排序：`composite desc, turnover desc, first_seen desc, stock_id asc`。
 
 ### 4.3 Alert FSM（重新設計，post codex round 1）
+
+> ⚠ **Superseded by [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §2.2 + §7: snapshot model.** FSM deleted in favor of daily-snapshot surfacing cadence. `alert_state_current` table repurposed as audit log with zero behavioral reads (writes only, on snapshot diff). See screener-pivot spec §7.1 for replacement model and §7.2 for schema repurpose.
 
 ```
                   ┌──────────────────┐
@@ -620,6 +629,8 @@ def test_no_duplicate_alerts_on_replay():
 
 ### 10.3 KPI Gate（必須全達標）
 
+> ⚠ **Deleted per [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §3.1.** KPI gate removed entirely (precision-only or otherwise). Backtest infrastructure retained as diagnostic monitoring per screener-pivot spec §3.2 (§10' "Diagnostic Monitoring"). The "v2 重新校準（2026-05-21）" note below is itself superseded by the same amendment.
+
 **v2 重新校準（2026-05-21）**：原 60/30 / 55/35 / 50/40 中的 FPR clause
 在現行 2-label `evaluate_signal` 下等於 `1 - precision`（所有非 correct 的
 decided case 都算 FP），等效於把 precision 門檻拉高 10 pp。經 spec author 確認
@@ -667,7 +678,7 @@ chart-pattern detector 結構上是 narrow / precision-prioritized；對 recall
 | P0 | 7 detector unit test + 合成 fixtures + FSM 轉移矩陣全綠 | 100% pass |
 | P1 | 30 熱門股 backfill 90 日 + 手動 inspect 命中合理性 | 主觀 OK |
 | P2 | 全 1000+ 股 backfill | DB < 50MB、無大量 fetch 失敗 |
-| **P3** | **Walk-forward backtest 5 年** | **§10 KPI 全達標** |
+| **P3** | **Walk-forward backtest 5 年** | **§10 KPI 全達標** *(superseded by [`2026-05-21-screener-semantics-pivot-design.md`](2026-05-21-screener-semantics-pivot-design.md) §4: P3 produces input numbers, no pass/fail gate)* |
 | P4 | Telegram 私訊單收件 5 個交易日 dry-run（不發 → 改發） | 0 漏推、0 重推、0 誤推 |
 | P5 | cron service 啟用 + WSL 開機自啟 | 連跑 1 週、`run_log` 成功率 ≥ 95% |
 | P6 | （選）失效通知、月度健康報告 | P5 穩定後 |
