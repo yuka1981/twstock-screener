@@ -52,6 +52,15 @@ CREATE INDEX IF NOT EXISTS idx_alert_state_episode
 CREATE INDEX IF NOT EXISTS idx_alert_state_last_surfaced
   ON alert_state_current(last_surfaced_date);
 
+-- Records every analyze run that successfully produced a snapshot, including
+-- runs with zero surfaced patterns. Required to disambiguate "absent in the
+-- immediately prior run" (reappearance per spec §7.2) from "no prior run on
+-- that date" (cron outage). Snapshot writer (snapshot.write_snapshot_diff)
+-- INSERTs on every call.
+CREATE TABLE IF NOT EXISTS snapshot_log (
+  snapshot_date DATE PRIMARY KEY
+);
+
 CREATE TABLE IF NOT EXISTS alert_history (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   stock_id        TEXT NOT NULL,
