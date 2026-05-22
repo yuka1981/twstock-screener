@@ -1,0 +1,8 @@
+pattern,direction,signals,correct,incorrect,inconclusive,precision,recall,ground_truth_events
+m_top,sell,704,232,433,39,0.3489,0.0054,42805
+descending_flag,sell,128,30,90,8,0.2500,0.0007,42805
+diamond_top,sell,1485,310,1030,145,0.2313,0.0072,42805
+rectangle,neutral,0,0,0,0,0.0000,0.0000,0
+w_bottom,buy,1484,396,937,151,0.2971,0.0098,40235
+ascending_flag,buy,50,12,32,6,0.2727,0.0003,40235
+ascending_wedge,buy,638,154,451,33,0.2545,0.0038,40235

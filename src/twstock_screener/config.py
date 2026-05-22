@@ -11,9 +11,12 @@ class Settings(BaseSettings):
     db_path: Path = Path("data/twstock.db")
     log_level: str = "INFO"
     min_volume_filter: int = 1_000_000
-    score_threshold_active: float = 0.4
-    score_threshold_invalidate: float = 0.2
-    max_alert_age_days: int = 30
+    # Per spec 2026-05-21-screener-semantics-pivot-design.md §7.1(a):
+    # patterns whose continuous presence exceeds this threshold (trading days)
+    # are dropped from the surfaced digest. Default carries over from the
+    # alert-era max_alert_age_days; re-derivation against snapshot-regime
+    # backtest data is deferred per amendment §7.1(a).
+    max_pattern_age_days: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
