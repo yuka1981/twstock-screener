@@ -1,5 +1,38 @@
+import logging
+
 import numpy as np
 from scipy.signal import find_peaks
+
+logger = logging.getLogger(__name__)
+
+# Split-discontinuity threshold (cycle #29 (c) hardening).
+#
+# TWSE daily price limit is +/-10% -> max legitimate adjacent-bar ratio
+# is ~1.111. Ratios > 1.5 indicate a corporate action (split / capital
+# reduction / large distribution) that destroys signal continuity. Empty
+# pivots returned for graceful degradation so downstream callers see
+# "insufficient signal" rather than the silent-failure mode that
+# surfaced in production 2026-05-22 on 00631L.
+#
+# Threshold derivation followed §4.1 bound-setting checklist from
+# retrospective `2026-05-22-pre-mortem-discipline-and-procedural-
+# checklists.md`. Full invocation log in the commit message of the
+# change that introduced this constant.
+MAX_ADJACENT_RATIO_THRESHOLD: float = 1.5
+
+
+def _max_adjacent_ratio(close: np.ndarray) -> float:
+    """Compute the maximum adjacent-bar ratio max(a/b, b/a) over
+    consecutive closes. Returns 1.0 for series shorter than 2."""
+    if len(close) < 2:
+        return 1.0
+    arr = np.asarray(close, dtype=float)
+    safe_prev = np.where(arr[:-1] == 0, np.nan, arr[:-1])
+    safe_curr = np.where(arr[1:] == 0, np.nan, arr[1:])
+    ratios = np.maximum(arr[1:] / safe_prev, arr[:-1] / safe_curr)
+    if np.all(np.isnan(ratios)):
+        return 1.0
+    return float(np.nanmax(ratios))
 
 
 def find_pivots(
@@ -15,10 +48,23 @@ def find_pivots(
         prominence_factor: prominence threshold = std(close) * factor.
 
     Returns:
-        (peak_indices, valley_indices) — empty lists if input is too short or flat.
+        (peak_indices, valley_indices) — empty lists if input is too
+        short, flat, or contains a split-discontinuity (max adjacent-bar
+        ratio > MAX_ADJACENT_RATIO_THRESHOLD).
     """
     if len(close) < distance * 2 or float(close.std()) == 0.0:
         return [], []
+
+    max_adj = _max_adjacent_ratio(np.asarray(close))
+    if max_adj > MAX_ADJACENT_RATIO_THRESHOLD:
+        logger.warning(
+            "pivot detection: max adjacent-bar ratio %.3f exceeds %.2f "
+            "threshold — likely split/corporate-action discontinuity. "
+            "Returning empty pivots for graceful degradation.",
+            max_adj, MAX_ADJACENT_RATIO_THRESHOLD,
+        )
+        return [], []
+
     prominence = float(close.std()) * prominence_factor
     peaks, _ = find_peaks(close, distance=distance, prominence=prominence)
     valleys, _ = find_peaks(-close, distance=distance, prominence=prominence)
