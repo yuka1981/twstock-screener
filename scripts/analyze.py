@@ -1,4 +1,16 @@
-"""Daily 8:20 analyze run. Loads DB, runs detectors + FSM, sends Telegram."""
+"""Daily 8:20 analyze run.
+
+Per spec 2026-05-21-screener-semantics-pivot-design.md: detectors run
+statelessly against today's OHLC, snapshot diff vs prior snapshot
+produces digest + departures, single batch Telegram send.
+
+init_db is called at startup to ensure the alert_state_current schema
+is at the snapshot-era shape (idempotent — no-op on already-migrated
+DBs, migrates pre-cutover FSM-era DBs in place per spec amendment
+2026-05-21-A §7.2). This is the chosen "first production analyze run
+triggers migration via existing init_db idempotent path" option from
+plan §8 deployment notes.
+"""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +20,7 @@ from datetime import date
 
 from twstock_screener.analyze import run_analysis
 from twstock_screener.config import Settings
-from twstock_screener.db import finish_run, start_run
+from twstock_screener.db import finish_run, init_db, start_run
 from twstock_screener.holidays import is_trading_day
 
 logging.basicConfig(
@@ -34,6 +46,7 @@ def main() -> int:
 
     settings = Settings()  # type: ignore[call-arg]
     today = date.fromisoformat(args.date) if args.date else date.today()
+    init_db(settings.db_path)
     if not is_trading_day(today, settings.db_path):
         logger.info("not a trading day, skip")
         return 0
