@@ -40,6 +40,20 @@ This spec amends the base spec's §3, §4, §10, §11. New base-spec sections ar
 
 **Coupling-category lesson** (captured for future pre-mortems): enumeration must include user-facing output paths that derive signals from cross-day state, not just detector and data layers.
 
+### Amendment 2026-05-22-A — §8.4 divergence gate replaced with sanity bounds
+
+**Trigger:** §8.3 step 5 execution surfaced that §8.4's named comparison artifact — the FSM-era 3a table preserved in retrospective `2026-05-21-kpi-gate-emit-set-methodology.md` — does not exist in tabulated form. The retrospective documents methodology and several scattered FSM-era cells (m_top 20.0%, ascending_wedge 25.0%, diamond_top 49.2% mid-LF, ascending_wedge 72.7% top-LF) but no full 6 × 4 bucket matrix. The FSM-era pipeline was deleted in p2.6 (commit `eea4e7b`), so the table is not reconstructable without git archaeology through the deletion boundary.
+
+**Scope of amendment:** §8.4 — replace per-cell pp-difference comparison gate with per-bucket sanity-bounds gate.
+
+**Decision encoded:** the original gate compared snapshot-era output against an historical baseline that is no longer recoverable in usable form. The replacement gate operates on the snapshot-era 3a table alone, using plausibility bounds derived from prior audit-cycle data (round-7 raw / threshold-passing / emit-set precision spread; round-13 ranking calibration LF buckets). Loses calibration-against-specific-baseline; preserves discipline-against-anomalous-output.
+
+**Why amendment rather than ad-hoc patch:** the original §8.4 named a specific artifact and gating procedure. Plan-level substitution ("use sanity bounds instead") would silently weaken a documented gate from "calibrated against historical evidence" to "based on intuition about reasonable ranges." Spec-level replacement keeps the gate change explicit and reviewable.
+
+**Why replacement over reconstruction:** the FSM-era 3a table was conceived as a calibration baseline back when the regime transition was hypothetical. Post-deploy, the snapshot-era table *is* the new baseline. Reconstructing an FSM-era number set produces an archaeological artifact for a regime that no longer exists; comparing against it is the wrong frame even if the reconstruction succeeds.
+
+**Coupling-category lesson** (captured for future pre-mortems): spec procedures naming comparison artifacts must verify the artifact exists in the required form at spec-write time. Cross-regime baselines — artifacts from a state that subsequent execution destroys — are especially fragile: they appear valid when written but become unrecoverable once the regime ends.
+
 ---
 
 ## Base-spec §3 — Chart-card percentages re-framed (this doc §1)
@@ -329,25 +343,45 @@ Steps 2–8 are a **single feature branch deploy unit**. Production stays on FSM
 
 ### Divergence validation protocol — step 5 (this doc §8.4)
 
-**Divergence metric:** **bucket-level absolute pp difference between FSM-era and snapshot-era precision per pattern × LF-bucket cell.** (Option (ii) per round-13 decision.)
+> **Superseded by amendment 2026-05-22-A** (see header). Original procedure (per-cell pp difference vs FSM-era 3a table) preserved below for traceability; **gate of record is the sanity-bounds procedure that follows.**
 
-**Why bucket-level:** ranking uses bucket-level numbers. Aggregate-pp comparison would mask the failure mode where a pattern's aggregate looks stable while its ranking-relevant bucket shifts.
+**Original procedure (no longer authoritative):**
 
-**No "(i) aggregate if practical" fallback.** Step 4 produces the bucket-level table by construction. Inability to produce it is a step-4 failure, not a divergence-metric fallback.
+> Divergence metric: bucket-level absolute pp difference between FSM-era and snapshot-era precision per pattern × LF-bucket cell. Bucket-level rather than aggregate because ranking uses bucket-level numbers. Step 4 produces the bucket-level table by construction; inability to produce it is a step-4 failure, not a divergence-metric fallback.
+>
+> Let `N = number of directional patterns (out of 6) whose snapshot-era precision differs from FSM-era by > 10pp in their chosen ranking bucket`. `rectangle` excluded (neutral, no ranking impact).
+>
+> | N | Action |
+> |---|---|
+> | 0 | Proceed to step 6 |
+> | 1 | Proceed with flag |
+> | ≥ 2 | Halt; root-cause |
+>
+> Comparison reference: FSM-era 3a table in retrospective `2026-05-21-kpi-gate-emit-set-methodology.md`.
+>
+> **Cannot run as written:** the named comparison artifact does not exist in the required tabulated form, and FSM code was deleted in p2.6 (commit `eea4e7b`). See amendment 2026-05-22-A header for full rationale.
 
-**Thresholds (mutually exclusive — count divergent patterns first, then dispatch):**
+**Replacement procedure (gate of record, per amendment 2026-05-22-A):**
 
-Let `N = number of directional patterns (out of 6) whose snapshot-era precision differs from FSM-era by > 10pp in their chosen ranking bucket`.
+**Divergence metric:** **per-bucket sanity bounds applied to the snapshot-era 3a table from step 4.** No external comparison baseline.
 
-**Exclusion:** `rectangle` (neutral pattern) is excluded from N. Per §2.4, rectangle is surfaced as pattern-presence without ranking adjustment, so divergence in its precision has no ranking impact and does not gate the transition.
+**Why sanity bounds rather than comparison:** the original comparison gate was designed to catch regime-transition surprises by holding the snapshot-era table to within 10pp of FSM-era cells. With the FSM-era table irrecoverable, the gate's discipline purpose (catch anomalous output before deploy) is preserved by sanity bounds on the snapshot-era output itself, derived from the precision shape established across round-7 / round-13 audit cycles.
 
-| N | Action |
-|---|---|
-| 0 | **Proceed to step 6.** All patterns within tolerance; snapshot-era sweet spots are authoritative |
-| 1 | **Proceed to step 6 with flag.** Document the divergent pattern explicitly in deployment notes and monitoring dashboard. May indicate that pattern has stronger FSM-dedup dependency than others |
-| ≥ 2 | **Halt at step 5.** Divergence is evidence that something beyond dedup semantics changed. Re-audit before proceeding. Not "investigate then decide" — "halt, root-cause, return with explanation" |
+**Per-bucket checks (all must hold for the gate to pass):**
 
-**Comparison reference:** snapshot-era cells compared against the FSM-era 3a table preserved in retrospective `docs/superpowers/retrospectives/2026-05-21-kpi-gate-emit-set-methodology.md` (or its successor doc if the table moves).
+| Check | Threshold | Rationale |
+|---|---|---|
+| Bucket precision floor | No bucket < 15% | Below this, the bucket is likely picking up a broken signal pipeline (e.g., wrong direction labeled, ground truth mis-aligned), not a weak-but-genuine pattern. TWSE chart-pattern emit-set precision empirically clusters in the 20–50% range across prior audit cycles. |
+| Bucket precision ceiling | No bucket > 70% | Above this, the bucket is likely revealing a selection-bias bug (e.g., bucket inadvertently filtered by an outcome-correlated variable). TWSE chart-pattern precision ceiling is empirically lower than 70% in every prior cycle, including round-7's bucketed analysis. |
+| Coverage continuity | No pattern produces 0 signals in a bucket where prior backtest cycles produced > 100 signals for the same (pattern, bucket) cell | Absolute coverage drop in a previously-populated bucket is more suspicious than precision drift. Indicates either a bug in bucket assignment or in upstream filtering. |
+
+**Exclusion:** `rectangle` (neutral, no directional precision) is excluded from all three checks — same exclusion rationale as original §8.4.
+
+**On failure:** halt at step 5. Root-cause the failing bucket before resuming. Same escalation discipline as the original gate — fixing a check by loosening the bound is not in scope; the bound either reflects the empirical envelope or the empirical envelope shifted enough to warrant a follow-up amendment.
+
+**On all checks passing:** proceed to step 6. Snapshot-era 3a table is authoritative for §2.4 ranking calibration.
+
+**Forward-compatibility:** when accumulated snapshot-era cycles establish a sufficient baseline (≥ 4 quarters of stable output), this gate may be revised back to a comparison gate against snapshot-era-historical cells. Out of scope for this amendment; deferred to a future amendment if and when the baseline accumulates.
 
 ### Step 7 interaction validation (this doc §8.5)
 
