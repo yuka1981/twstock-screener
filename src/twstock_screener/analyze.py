@@ -43,6 +43,7 @@ from twstock_screener.detectors import (
 )
 from twstock_screener.holidays import is_trading_day
 from twstock_screener.notify import send_alert
+from twstock_screener.ranking import apply_in_bucket_sort
 from twstock_screener.score import composite_score
 from twstock_screener.snapshot import (
     SnapshotDiff,
@@ -252,21 +253,18 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         settings.db_path, today, candidates, settings.max_pattern_age_days,
     )
 
-    def _sort_key(c: Candidate):
-        # Per spec §2.4: ranking by (in-bucket, composite_score desc).
-        # in-bucket sweet-spot logic added in phase 6 post snapshot-regime
-        # backtest calibration; until then, sort by composite desc with
-        # turnover as tiebreak.
-        return (-c.composite, -c.close * c.avg_volume_20d, c.stock_id)
-
-    sells = sorted(
-        [c for c in candidates if c.pattern in SELL_PATTERNS], key=_sort_key,
+    # Per spec §2.4 + amendment 2026-05-22-B: rank by (in-bucket, composite,
+    # turnover, stock_id). apply_in_bucket_sort handles patterns without
+    # sweet spots (rectangle, fallback) by treating every candidate as
+    # out-of-bucket — effectively composite-only sort for those patterns.
+    sells = apply_in_bucket_sort(
+        [c for c in candidates if c.pattern in SELL_PATTERNS]
     )[:10]
-    buys = sorted(
-        [c for c in candidates if c.pattern in BUY_PATTERNS], key=_sort_key,
+    buys = apply_in_bucket_sort(
+        [c for c in candidates if c.pattern in BUY_PATTERNS]
     )[:10]
-    boxes = sorted(
-        [c for c in candidates if c.pattern in BOX_PATTERNS], key=_sort_key,
+    boxes = apply_in_bucket_sort(
+        [c for c in candidates if c.pattern in BOX_PATTERNS]
     )[:5]
     departures = _resolve_departures(settings.db_path, diff.departed)
 
