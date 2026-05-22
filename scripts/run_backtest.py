@@ -51,6 +51,15 @@ def main() -> int:
         "(snapshot-regime 3a table per spec §8.3 step 4) to this path.",
     )
     parser.add_argument(
+        "--emit-detail-csv",
+        type=str,
+        default=None,
+        help="If set, dump every emit-set member as a row "
+        "(date, stock_id, pattern, lf, bucket, outcome, ...). "
+        "Diagnostic — used to investigate §8.4 gate failures by slicing "
+        "per (pattern, bucket) cell.",
+    )
+    parser.add_argument(
         "--max-pattern-age-days",
         type=int,
         default=30,
@@ -78,6 +87,7 @@ def main() -> int:
         end,
     )
     run_id = start_run(settings.db_path, date.today(), "backtest")
+    emit_sink: list[dict] | None = [] if args.emit_detail_csv else None
     try:
         results = walk_forward_emitted(
             settings.db_path,
@@ -85,6 +95,7 @@ def main() -> int:
             start,
             end,
             max_pattern_age_days=args.max_pattern_age_days,
+            emit_detail_sink=emit_sink,
         )
     except Exception as exc:
         finish_run(settings.db_path, run_id, "failed", error=str(exc))
@@ -114,6 +125,27 @@ def main() -> int:
                 r.recall * 100,
                 r.ground_truth_events,
             )
+
+    if args.emit_detail_csv and emit_sink is not None:
+        Path(args.emit_detail_csv).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.emit_detail_csv, "w") as f:
+            f.write(
+                "date,stock_id,pattern,direction,lf,bucket,avg_vol,"
+                "close,composite,fwd_return,outcome\n"
+            )
+            for r in emit_sink:
+                f.write(
+                    f"{r['date']},{r['stock_id']},{r['pattern']},"
+                    f"{r['direction']},{r['lf']:.4f},\"{r['bucket']}\","
+                    f"{r['avg_vol']:.0f},{r['close']:.2f},"
+                    f"{r['composite']:.4f},{r['fwd_return']:.6f},"
+                    f"{r['outcome']}\n"
+                )
+        logger.info(
+            "emit-detail CSV written to %s (%d rows)",
+            args.emit_detail_csv,
+            len(emit_sink),
+        )
 
     if args.report_3a_csv:
         Path(args.report_3a_csv).parent.mkdir(parents=True, exist_ok=True)

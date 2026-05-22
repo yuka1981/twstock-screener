@@ -175,6 +175,7 @@ def walk_forward_emitted(
     end: date,
     forward_days: int = 20,
     max_pattern_age_days: int = 30,
+    emit_detail_sink: list[dict] | None = None,
 ) -> dict[str, BacktestResult]:
     """Replay live-system pipeline day-by-day under snapshot semantics.
 
@@ -294,19 +295,37 @@ def walk_forward_emitted(
             if direction is None:
                 continue  # rectangle — non-directional, not scored
             counts[c.pattern]["signals"] += 1
-            bucket = _lf_bucket(liquidity_factor(c.avg_vol))
+            lf = liquidity_factor(c.avg_vol)
+            bucket = _lf_bucket(lf)
             bucket_counts[c.pattern][bucket]["signals"] += 1
             df = histories[c.sid]
             ev = evaluate_signal(df, c.signal_idx, direction, forward_days)
             if ev["correct"] is True:
+                outcome = "correct"
                 counts[c.pattern]["correct"] += 1
                 bucket_counts[c.pattern][bucket]["correct"] += 1
             elif ev["correct"] is False:
+                outcome = "incorrect"
                 counts[c.pattern]["incorrect"] += 1
                 bucket_counts[c.pattern][bucket]["incorrect"] += 1
             else:
+                outcome = "inconclusive"
                 counts[c.pattern]["inconclusive"] += 1
                 bucket_counts[c.pattern][bucket]["inconclusive"] += 1
+            if emit_detail_sink is not None:
+                emit_detail_sink.append({
+                    "date": d_at.isoformat(),
+                    "stock_id": c.sid,
+                    "pattern": c.pattern,
+                    "direction": direction,
+                    "lf": lf,
+                    "bucket": bucket,
+                    "avg_vol": c.avg_vol,
+                    "close": c.close,
+                    "composite": c.composite,
+                    "fwd_return": ev["forward_return"],
+                    "outcome": outcome,
+                })
 
         prev_day_pairs = today_pairs
 
