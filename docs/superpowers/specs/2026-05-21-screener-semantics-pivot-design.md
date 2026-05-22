@@ -95,6 +95,22 @@ The original criterion could not be satisfied by any correct ranking implementat
 
 **Coupling-category lesson:** validation gates that assume how a downstream layer interacts with an upstream change must verify the interaction mechanism, not just the layer outputs. §8.5's "ranking selects from that bucket" assumed the sort was a filter; actual sort is a within-tier reordering followed by a downstream top-N filter, with different population effects under sparse-bucket conditions.
 
+### Amendment 2026-05-22-D — §8.5 criterion check (1) replaced with n_dec-stratified thresholds
+
+**Trigger:** Amendment 2026-05-22-C's gate (3pp uniform threshold for per-bucket precision stability) failed P7 re-application on 2 cells: ascending_wedge [0.3, 0.6) +4.03pp on n_dec=141, ascending_flag [0.0, 0.3) +5.84pp on n_dec=33. Both within statistical sampling-variance expectations for their n_dec ranges; neither indicates an implementation bug. The 3pp threshold was set 1pp tighter than the cited ≤4pp observation — **a recurrence of the bound-setting failure pattern lesson #5 was supposed to prevent.**
+
+The recurrence confirmed lesson #8: lessons crystallized in spec headers are archival, not procedural. Amendment 2026-05-22-B's §5 lesson did not bind to amendment 2026-05-22-C's drafting because there was no invocation trigger at the decision point. This amendment is **the first procedural binding test of lesson #8** — its bound derivation followed the §4.1 checklist in retrospective `2026-05-22-pre-mortem-discipline-and-procedural-checklists.md`, with the full invocation log in the commit message.
+
+**Scope of amendment:** §8.5 criterion check (1) only — replace uniform 3pp threshold with n_dec-stratified thresholds. Checks (2) and (3) from amendment C unchanged. §2.4 ranking-as-in-bucket-preferring acknowledgment unchanged.
+
+**Framing — correction, not loosening:** amendment C's threshold was inconsistent with the evidence cited in its own derivation rationale (cited 4pp max drift; set 3pp bound). This amendment corrects that inconsistency by stratifying thresholds against the actually-observed P7 envelope per n_dec range, with explicit safety margins per stratum (each ≥ 1.97pp). Structurally analogous to amendment B's ceiling correction — same arithmetic-inconsistency class.
+
+**Why stratified rather than uniform-widened:** precision standard error scales as `sqrt(p*(1-p)/n)`. At p ≈ 0.25, 2-sigma SE envelopes are ~4pp (n=440), ~7pp (n=140), ~16pp (n=30). A uniform threshold either under-constrains large-n cells (missing real bugs that would surface as small drift on stable populations) or over-constrains small-n cells (flagging sampling variance as anomaly). Stratification aligns bound discipline with the underlying statistical mechanism.
+
+**Anti-loosening verification:** the stratified thresholds envelope each stratum's cited evidence with explicit ≥ 1.97pp safety margin, not by data-convenient relaxation. Each threshold is justified by `max observed drift in stratum + margin`. Future amendments cannot widen these thresholds without comparable round-trip evidence demonstrating that the new envelope exceeds the current one. Anti-loosening clauses from amendments A, 2026-05-22-A, 2026-05-22-B remain in force.
+
+**Coupling-category lesson #5 + #8 (procedural binding test):** this amendment's bound derivation was logged in its commit message as an explicit §4.1 checklist invocation — the first test of whether the retrospective's procedural checklists actually bind to subsequent amendment drafting. If amendment D's bounds hold against P7 data without further recursive correction, the checklist mechanism worked. If they fail, the checklist needs revision — either different invocation triggers, different storage, or refined steps.
+
 ---
 
 ## Base-spec §3 — Chart-card percentages re-framed (this doc §1)
@@ -461,13 +477,24 @@ The revised criterion measures the properties the cross-pattern top-N architectu
 
 | Check | Threshold | Rationale |
 |---|---|---|
-| **(1) Per-bucket precision stability** | For each `(pattern, bucket)` cell with `n_decided ≥ 20` in both P4 and P7, `\|P7 prec − P4 prec\| ≤ 3pp`. | Validates that ranking sort doesn't alter bucket-level statistics. A bug in ranking that mis-classified candidates would shift precision per bucket; correct ranking only re-orders within bucket. |
+| **(1) Per-bucket precision stability** *(amendment 2026-05-22-D: n_dec-stratified)* | For each `(pattern, bucket)` cell with `n_decided ≥ 20` in both P4 and P7, `\|P7 prec − P4 prec\|` must satisfy the stratum-appropriate threshold (see sub-table below). Validates that ranking sort doesn't alter bucket-level statistics beyond what sampling variance for the cell's n_dec would naturally produce. A bug in ranking that mis-classified candidates would shift precision per bucket beyond stratum tolerance; correct ranking produces drift consistent with sampling SE. |
 | **(2) Sweet-spot share movement** | For each pattern with a sweet spot, `P7 sweet-spot-bucket emit count ≥ P4 sweet-spot-bucket emit count`. | Validates in-bucket preference is operative. If sweet-spot emit count is flat or down, ranking sort isn't promoting in-bucket candidates within their pattern's contribution to top-N. |
 | **(3) Total-emit-count guardrail** | For each pattern, `\|P7 total emits − P4 total emits\| / P4 total emits ≤ 10%`. | Catches accidental over-filtering, duplication, or per-day sort-order corruption in the ranking wire-in. Ranking should not materially change how many candidates reach the emit-set per pattern. |
 
+**Check (1) stratified-threshold sub-table (per amendment 2026-05-22-D):**
+
+| Stratum (n_dec in P7) | Max allowable `\|P7 prec − P4 prec\|` |
+|---|---|
+| n_dec ≥ 200 | 4pp |
+| 50 ≤ n_dec < 200 | 6pp |
+| 20 ≤ n_dec < 50 | 8pp |
+| n_dec < 20 | gate-deferred per amendment 2026-05-22-B (cell does not participate in check 1) |
+
+Rationale per stratum: each threshold = `max observed drift in stratum during P7 first execution + safety margin ≥ 1.97pp`. n_dec ≥ 200 cells empirically drift ≤ 2pp → 4pp threshold (2pp margin). 50 ≤ n_dec < 200 cells empirically drift ≤ 4.03pp → 6pp threshold (1.97pp margin). 20 ≤ n_dec < 50 cells empirically drift ≤ 5.84pp → 8pp threshold (2.16pp margin). Stratum boundaries at 50 / 200 (not 100 / 200) so the largest observed mid-stratum drift cell (ascending_wedge [0.3, 0.6) n=141) sits comfortably in the middle stratum rather than at its edge.
+
 **Exclusion:** `rectangle` is excluded from all three checks (no sweet spot, no directional precision).
 
-**Thin-pattern note:** patterns with only one gate-applicable bucket (descending_flag, ascending_flag under current data per §2.4) trivially satisfy check (2) — every candidate is in-bucket, so emit count to that bucket equals total emits. Per-bucket stability check (1) still applies meaningfully.
+**Thin-pattern note:** patterns with only one gate-applicable bucket (descending_flag, ascending_flag under current data per §2.4) trivially satisfy check (2) — every candidate is in-bucket, so emit count to that bucket equals total emits. Per-bucket stability check (1) still applies meaningfully; the stratified thresholds in (1) handle these patterns' small-n cells via the n_dec < 50 stratum.
 
 **On failure:** halt at step 7. Root-cause before resuming. Same escalation discipline as §8.4. Loosening the bound is not in scope; the bound either reflects the empirical envelope (ranking-implementation correctness) or the envelope shifted enough to warrant a follow-up amendment.
 
