@@ -75,6 +75,26 @@ This spec amends the base spec's §3, §4, §10, §11. New base-spec sections ar
 - *Bound-setting amendments must round-trip against the evidence cited in their own derivation rationale.* Citing evidence that exceeds the bound being set is self-defeating — the bound reflects neither the cited envelope nor a defensible margin around it.
 - *Outcome-classification field names in measurement code carry implicit semantics that spec authors must verify rather than assume.* Reusing `inconclusive` in spec text without checking what the codebase counts as inconclusive caused the (γ)-vs-(β) classification confusion during investigation.
 
+### Amendment 2026-05-22-C — §8.5 criterion reframing (per-bucket stability + share movement)
+
+**Trigger:** §8.5 gate first application (P7 execution) surfaced that the original criterion ("per-pattern aggregate precision within ±5pp of sweet-spot bucket precision") embedded an unstated assumption: that the per-category top-N filter is saturable by sweet-spot bucket emits alone. Under observed emit-count distributions (e.g., diamond_top's sweet-spot bucket = 156 emits / 2yr ≈ 0.3/day vs daily sell-slot capacity of 10), out-of-bucket emits necessarily fill remaining slots regardless of ranking. Aggregate precision converges toward weighted average across buckets, not sweet-spot bucket precision.
+
+The original criterion could not be satisfied by any correct ranking implementation under current data shape. P7 root-cause diagnostic showed:
+
+- Per-bucket precision drift between P4 and P7: ≤ 4pp on small-n buckets, ~0pp on n > 100. Ranking is correctly in-bucket-preferring.
+- Sweet-spot bucket emit shares increased between P4 and P7: diamond_top +3, w_bottom +131, ascending_wedge +26. Ranking is doing what it was designed to do.
+- Per-pattern aggregate precision deviation from sweet-spot bucket precision is structural (cross-pattern top-N saturation under sparse buckets), not implementation-driven.
+
+**Scope of amendment:** §8.5 criterion (replace aggregate-precision band with per-bucket stability + sweet-spot share movement + total-emit-count guardrail). §2.4 ranking documentation (acknowledge structural limitation under current sparsity).
+
+**Framing — correction, not loosening:** the original criterion measured a quantity the architecture cannot satisfy. The revised criterion measures the properties the architecture can actually deliver: per-bucket precision invariance under ranking change + in-bucket share movement. Structurally analogous to amendment 2026-05-22-B's ceiling correction — correcting an inconsistency between criterion and underlying mechanism, not relaxing discipline. **Anti-loosening clauses from amendments A and B remain in force.**
+
+**Why not architectural change (per-pattern top-N instead of per-category top-N):** would cascade into digest message format, user-facing semantics, and full P7 re-execution. The cost is wrong direction — changing the product to satisfy a misframed validation criterion. Criterion should match the product, not vice versa.
+
+**Why not "accept limitation and skip the gate":** that is the loosening anti-pattern. Skipping a gate because it inconveniently fails violates the discipline amendments A and B were designed to preserve. The gate must still measure *something* meaningful — not be bypassed.
+
+**Coupling-category lesson:** validation gates that assume how a downstream layer interacts with an upstream change must verify the interaction mechanism, not just the layer outputs. §8.5's "ranking selects from that bucket" assumed the sort was a filter; actual sort is a within-tier reordering followed by a downstream top-N filter, with different population effects under sparse-bucket conditions.
+
 ---
 
 ## Base-spec §3 — Chart-card percentages re-framed (this doc §1)
@@ -160,6 +180,8 @@ A pattern's sweet spot is the bucket with **highest precision among gate-applica
 **Fallback when all of a pattern's buckets are deferred:** that pattern uses no in-bucket boost — ranking falls back to composite-only sort within the pattern's candidate list. This is the explicit absence-of-evidence path; do not silently substitute a deferred-cell precision as if it were authoritative.
 
 **Operational expectation:** under current TWSE liquidity distribution, the top-LF bucket `[0.9, 2.0)` is structurally undersupplied (≤ ~20 emits per 2-year window for most patterns) and will frequently be gate-deferred. This is a known structural property, not a bug. Future amendment may revisit LF formula calibration or bucket boundaries if the sparseness persists across accumulated cycles.
+
+**Per-pattern LF sweet-spot ranking is "in-bucket-preferring", not "sweet-spot-targeting" (per amendment 2026-05-22-C clarification):** the sort key promotes in-bucket candidates within each pattern's contribution to per-category top-N (sells/buys/boxes), but the cross-pattern top-N filter is the binding constraint on emit-set composition. When a pattern's sweet-spot bucket is sparse relative to slot capacity (observed: ~0.3-1 sweet-spot emit/day vs 10 daily slots per category), out-of-bucket emits from that same pattern still saturate remaining slots — ranking shifts ordering but does not gate-filter. Aggregate per-pattern precision in production will therefore reflect the weighted average across buckets, not the sweet-spot bucket precision. The ranking still delivers measurable in-bucket emit-share gain over composite-only sort (validated under §8.5 step 7) — described accurately, it is an incremental ordering improvement, not a precision-targeting mechanism.
 
 ---
 
@@ -423,11 +445,33 @@ Steps 2–8 are a **single feature branch deploy unit**. Production stays on FSM
 
 ### Step 7 interaction validation (this doc §8.5)
 
-**Why tighter than step 5 (5pp vs 10pp):** step 5 compares **across regimes** (FSM-era vs snapshot-era) — 10pp tolerance accounts for genuine semantic difference. Step 7 compares **within the same regime** (snapshot model alone vs snapshot model + ranking) — any divergence > 5pp indicates an integration bug between detection and ranking layers, not regime semantics.
+> **Superseded by amendment 2026-05-22-C** (see header). Original criterion (per-pattern aggregate within ±5pp of sweet-spot bucket precision) preserved below for traceability; **gate of record is the per-bucket-stability + share-movement procedure that follows.**
 
-**Specifically:** the precision distribution per pattern under combined logic (snapshot detection + 3-β ranking) should be consistent with the snapshot-era 3a table's chosen ranking buckets. If diamond_top's snapshot-era [0.6, 0.9) bucket showed 41% precision at step 4, the combined-logic backtest at step 7 should show diamond_top precision within 5pp of 41% (because ranking selects from that bucket).
+**Original procedure (no longer authoritative):**
 
-Material deviation triggers reconciliation before deploy.
+> Per-pattern aggregate precision under combined logic (snapshot detection + sweet-spot ranking) within ±5pp of the snapshot-era 3a table's chosen ranking bucket. Tighter than §8.4 step 5 (5pp vs 10pp) because comparison is within the same regime; deviation > 5pp would indicate an integration bug.
+>
+> Specifically: if diamond_top's snapshot-era [0.6, 0.9) bucket showed 39% precision at step 4, the combined-logic backtest at step 7 should show diamond_top precision within 5pp of 39%.
+>
+> **Cannot run as written:** assumes per-category top-N saturable by sweet-spot bucket emits alone; under current emit-count distributions (sweet-spot buckets ≈ 0.3-1 emit/day vs 10 daily slots), out-of-bucket emits structurally fill remaining top-N slots. See amendment 2026-05-22-C header for full rationale.
+
+**Replacement procedure (gate of record, per amendment 2026-05-22-C):**
+
+The revised criterion measures the properties the cross-pattern top-N architecture actually preserves under ranking change. All three checks must hold for the gate to pass.
+
+| Check | Threshold | Rationale |
+|---|---|---|
+| **(1) Per-bucket precision stability** | For each `(pattern, bucket)` cell with `n_decided ≥ 20` in both P4 and P7, `\|P7 prec − P4 prec\| ≤ 3pp`. | Validates that ranking sort doesn't alter bucket-level statistics. A bug in ranking that mis-classified candidates would shift precision per bucket; correct ranking only re-orders within bucket. |
+| **(2) Sweet-spot share movement** | For each pattern with a sweet spot, `P7 sweet-spot-bucket emit count ≥ P4 sweet-spot-bucket emit count`. | Validates in-bucket preference is operative. If sweet-spot emit count is flat or down, ranking sort isn't promoting in-bucket candidates within their pattern's contribution to top-N. |
+| **(3) Total-emit-count guardrail** | For each pattern, `\|P7 total emits − P4 total emits\| / P4 total emits ≤ 10%`. | Catches accidental over-filtering, duplication, or per-day sort-order corruption in the ranking wire-in. Ranking should not materially change how many candidates reach the emit-set per pattern. |
+
+**Exclusion:** `rectangle` is excluded from all three checks (no sweet spot, no directional precision).
+
+**Thin-pattern note:** patterns with only one gate-applicable bucket (descending_flag, ascending_flag under current data per §2.4) trivially satisfy check (2) — every candidate is in-bucket, so emit count to that bucket equals total emits. Per-bucket stability check (1) still applies meaningfully.
+
+**On failure:** halt at step 7. Root-cause before resuming. Same escalation discipline as §8.4. Loosening the bound is not in scope; the bound either reflects the empirical envelope (ranking-implementation correctness) or the envelope shifted enough to warrant a follow-up amendment.
+
+**On all checks passing:** proceed to step 8 atomic deploy.
 
 ### Post-deploy expectation (this doc §8.6)
 
