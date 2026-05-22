@@ -158,3 +158,59 @@ Prior retrospective `2026-05-21-kpi-gate-emit-set-methodology.md` documented tec
 This retrospective intends to be different: §4's checklists are procedural artifacts that future amendment-drafting and spec-writing should reference explicitly. The success criterion for this retrospective is not "it accurately captures what we learned" — it is "subsequent cycles invoke the checklists at the appropriate decision points and the cycle's failure patterns do not recur."
 
 If a future cycle exhibits the recursive bound-setting failure (lesson #5 violation), the procedural binding failed and §4.1 needs strengthening — different invocation triggers, different workflow integration, or different storage location. The retrospective is itself subject to revision when its checklists prove insufficient.
+
+---
+
+## Appendix A — Task numbering history (cycle decision sequence)
+
+The cycle ran over multiple sessions with an evolving task list. Tasks #1–#9 originated pre-compaction (prior session) and are not reconstructible from this retrospective's visible state. Tasks #10–#28 are documented here for future-session archaeology.
+
+The grouping by phase reflects the actual decision-time sequence: review tasks first (clarifying spec design before writing), then writing tasks (spec, annotations, plan), then implementation tasks (P2–P7), then methodology consolidation (#21/#22 retrospective + memory).
+
+**Pre-implementation review (#10–#16)** — clarifying questions on the screener-semantics pivot spec draft before commit:
+
+| # | Subject |
+|---|---|
+| #10 | Review spec draft: §3 chart-card re-framing |
+| #11 | Review spec draft: §4.1 composite_score role |
+| #12 | Review spec draft: §10 KPI gate deletion + §10' diagnostic monitoring |
+| #13 | Review spec draft: §10.1 surfacing cadence (FSM removal) |
+| #14 | Review spec draft: §11 phase gate removal |
+| #15 | Review spec draft: wedge direction + v2 calibration clauses |
+| #16 | Confirm 3-β internal ranking specifics post-spec |
+
+**Spec + plan writing (#18–#20):**
+
+| # | Subject |
+|---|---|
+| #18 | Draft screener-semantics-pivot spec (`2026-05-21-screener-semantics-pivot-design.md`) |
+| #19 | Annotate base spec §3.3/§4.1/§4.3/§10.3/§11.2 with supersession refs |
+| #20 | Write implementation plan for 8-step transition sequence |
+
+**Implementation execution (#17 super-task + sub-task spawning) — #17 was the top-level "P2-P8 implementation" tracker; sub-task IDs #23/#26/#27/#28 spawned as specific phases hit non-trivial gap surfacing:**
+
+| # | Subject |
+|---|---|
+| #17 | P2-P8 implementation per screener-semantics-pivot-plan (super-task, marked complete at P8 atomic merge) |
+| #23 | P4: extend backtest with LF-bucket matrix output |
+| #26 | Investigate failing-bucket population + draft amendment 2026-05-22-B (spawned from P5 §8.4 gate failure) |
+| #27 | P6: implement per-pattern LF sweet-spot ranking |
+| #28 | P7: §8.5 gate execution + amendments C/D (initially "halt 1" then "halt 2" then "complete") |
+
+**Methodology consolidation (#21/#22/#24/#25):**
+
+| # | Subject |
+|---|---|
+| #24 | Amendment 2026-05-22-A: replace §8.4 comparison gate with sanity bounds (spawned from P5 first execution) |
+| #25 | Log coupling-category lesson candidate #4 (cross-regime baseline artifacts) |
+| #21 | Draft pre-mortem-discipline retrospective doc (this file) |
+| #22 | Memory write — pre-mortem-discipline methodology (feedback type, at `~/.claude/projects/-home-reid-stock/memory/pre_mortem_discipline.md`) |
+
+**Observations on the numbering pattern:**
+
+- Tasks were created reactively as gaps surfaced rather than enumerated upfront. The numbering sequence (10-16 → 18-20 → 17 → 21-22 → 23-28) is decision-time order, not topological order.
+- The super-task / sub-task pattern on #17 (top-level) + #23/#26/#27/#28 (sub-phases) reflects the cycle's actual execution: a single planned phase-sequence with sub-tasks spawning when phases produced amendment-triggering surprises (P5 → #26, P7 → #28).
+- Methodology tasks (#21/#22) were initially deferred ("after P8 closure when evidence base is rich") and promoted ("draft now") when the lesson #8 recursive failure made the procedural-checklist mechanism urgent. The promotion itself is documented in this retrospective's body.
+- Some task descriptions evolved mid-execution as scope clarified — e.g., #28 was first "P7 implementation", then "P7 HALT: gate fails", then "P7 HALT 2: amendment C threshold too tight", finally "P7 COMPLETE: §8.5 passes". Task description history is preserved in the task tracker but not in this appendix.
+
+**On gaps in the numbering:** the cycle had occasional task-ID gaps (no visible #9, #29+) reflecting deleted or never-created IDs. Not all task IDs were used; numbering is sparse not contiguous.
