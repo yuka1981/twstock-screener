@@ -176,6 +176,7 @@ def walk_forward_emitted(
     forward_days: int = 20,
     max_pattern_age_days: int = 30,
     emit_detail_sink: list[dict] | None = None,
+    apply_ranking: bool = False,
 ) -> dict[str, BacktestResult]:
     """Replay live-system pipeline day-by-day under snapshot semantics.
 
@@ -268,8 +269,19 @@ def walk_forward_emitted(
 
         # 5. Top-N per category, composite desc + turnover tiebreak
         # (matches analyze.run_analysis sort key).
-        def _sort_key(c: _DayCandidate):
-            return (-c.composite, -c.close * c.avg_vol, c.sid)
+        # When apply_ranking is True (P7 interaction validation per spec
+        # §8.5), the sort key adds an in-bucket boolean drawn from
+        # ranking.is_in_sweet_spot — mirrors analyze.run_analysis behavior
+        # after p6.2.
+        if apply_ranking:
+            from twstock_screener.ranking import is_in_sweet_spot
+
+            def _sort_key(c: _DayCandidate):
+                in_bucket = is_in_sweet_spot(c.pattern, liquidity_factor(c.avg_vol))
+                return (not in_bucket, -c.composite, -c.close * c.avg_vol, c.sid)
+        else:
+            def _sort_key(c: _DayCandidate):
+                return (-c.composite, -c.close * c.avg_vol, c.sid)
 
         sells = sorted(
             [c for c in survived_after_age if c.pattern in SELL_PATTERNS],

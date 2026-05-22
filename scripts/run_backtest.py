@@ -65,6 +65,14 @@ def main() -> int:
         default=30,
         help="age filter (spec §7.1(a)); default matches Settings default",
     )
+    parser.add_argument(
+        "--apply-ranking",
+        action="store_true",
+        help="Enable per-pattern LF sweet-spot ranking (spec §2.4 + "
+        "amendment 2026-05-22-B propagation rules) in the top-N sort. "
+        "Use for P7 pre-deploy interaction validation; leave off to "
+        "reproduce P3/P4 composite-only baseline.",
+    )
     args = parser.parse_args()
 
     settings = Settings()  # type: ignore[call-arg]
@@ -96,6 +104,7 @@ def main() -> int:
             end,
             max_pattern_age_days=args.max_pattern_age_days,
             emit_detail_sink=emit_sink,
+            apply_ranking=args.apply_ranking,
         )
     except Exception as exc:
         finish_run(settings.db_path, run_id, "failed", error=str(exc))
