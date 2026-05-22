@@ -54,6 +54,27 @@ This spec amends the base spec's §3, §4, §10, §11. New base-spec sections ar
 
 **Coupling-category lesson** (captured for future pre-mortems): spec procedures naming comparison artifacts must verify the artifact exists in the required form at spec-write time. Cross-regime baselines — artifacts from a state that subsequent execution destroys — are especially fragile: they appear valid when written but become unrecoverable once the regime ends.
 
+### Amendment 2026-05-22-B — §8.4 ceiling correction + small-n threshold + outcome-terminology clarification
+
+**Trigger:** §8.4 sanity gate first execution (P5) surfaced three logical inconsistencies in amendment 2026-05-22-A.
+
+**(1) Ceiling arithmetic error.** Amendment A set the bucket-precision ceiling at 70% without round-trip validation against the evidence cited in its own derivation rationale. The cited round-13 cell `ascending_wedge top-LF 72.7%` already exceeded the bound being set. The ceiling violated A's own anti-loosening clause on day one — not because data shifted, but because the bound was inconsistent with the cited envelope at write time.
+
+**(2) Omitted minimum-evidence requirement.** A specified precision-based bounds without a minimum decided-n threshold. The first gate application showed cells with n_decided as low as 1 (descending_flag top-LF) and 9 (w_bottom top-LF, with 30/39 signals unresolved) producing precision verdicts that are statistical noise, not signal. The gate's discipline purpose collapses when applied to noise-dominated cells.
+
+**(3) "Inconclusive" terminology ambiguity.** A's text reused the `BacktestResult.inconclusive` field name without surfacing what it actually counts. Investigation showed `evaluate_signal` produces `correct=None` (inconclusive count) **only** on forward-window truncation (`signal_idx + forward_days - 1 > len(df) - 1`) — i.e., the signal is too close to dataset end for forward evaluation. There is **no "low-volatility / |fwd_return| < threshold" inconclusive class** under current evaluation. The investigation's "(γ) measurement-truncation" cell classification arose because this distinction was not in the spec.
+
+**Scope of amendment:** §8.4 procedure (ceiling correction, small-n threshold, gate-deferred status, terminology clarification), §2.4 ranking calibration (gate-deferred propagation — deferred cells cannot be authoritative sweet spots).
+
+**Framing — corrections, not loosening:** All three changes are scoped to logical inconsistencies in amendment A itself, not data-driven bound relaxation. Ceiling correction restores consistency between bound and cited evidence. Small-n threshold fills a structural omission. Terminology clarification removes ambiguity about what the gate counts. **A's anti-loosening clause remains in force** — future amendments cannot raise the ceiling further without comparable inconsistency-correction justification.
+
+**Ceiling number derivation:** cited FSM-era cell `ascending_wedge top-LF 72.7%` + observed snapshot-era same cell at 82.35% (~10pp regime-shift margin) → 82.7% lower bound on defensible ceiling. Rounded up to 85% for safety and round-number defensibility. 88% / 90% rejected: 88% is unprincipled relative to envelope data; 90% would weaken the gate's discipline purpose for marginal benefit.
+
+**Coupling-category lessons (two, captured for future pre-mortems):**
+
+- *Bound-setting amendments must round-trip against the evidence cited in their own derivation rationale.* Citing evidence that exceeds the bound being set is self-defeating — the bound reflects neither the cited envelope nor a defensible margin around it.
+- *Outcome-classification field names in measurement code carry implicit semantics that spec authors must verify rather than assume.* Reusing `inconclusive` in spec text without checking what the codebase counts as inconclusive caused the (γ)-vs-(β) classification confusion during investigation.
+
 ---
 
 ## Base-spec §3 — Chart-card percentages re-framed (this doc §1)
@@ -131,6 +152,14 @@ Per-pattern empirical LF sweet spots (derived from snapshot-regime 3a table — 
 | ascending_flag | LF ∈ [0.0, 0.3) |
 | descending_flag | LF ∈ [0.0, 0.3) |
 | rectangle | not directional; surfaced as pattern-presence, no ranking adjustment |
+
+**Sweet-spot selection rules (per amendment 2026-05-22-B propagation from §8.4):**
+
+A pattern's sweet spot is the bucket with **highest precision among gate-applicable cells** (i.e., cells with `n_decided ≥ 20` per §8.4 small-n threshold). Gate-deferred cells cannot be selected as sweet spots — their precision figures are noise-dominated and provide no calibration signal.
+
+**Fallback when all of a pattern's buckets are deferred:** that pattern uses no in-bucket boost — ranking falls back to composite-only sort within the pattern's candidate list. This is the explicit absence-of-evidence path; do not silently substitute a deferred-cell precision as if it were authoritative.
+
+**Operational expectation:** under current TWSE liquidity distribution, the top-LF bucket `[0.9, 2.0)` is structurally undersupplied (≤ ~20 emits per 2-year window for most patterns) and will frequently be gate-deferred. This is a known structural property, not a bug. Future amendment may revisit LF formula calibration or bucket boundaries if the sparseness persists across accumulated cycles.
 
 ---
 
@@ -361,25 +390,34 @@ Steps 2–8 are a **single feature branch deploy unit**. Production stays on FSM
 >
 > **Cannot run as written:** the named comparison artifact does not exist in the required tabulated form, and FSM code was deleted in p2.6 (commit `eea4e7b`). See amendment 2026-05-22-A header for full rationale.
 
-**Replacement procedure (gate of record, per amendment 2026-05-22-A):**
+**Replacement procedure (gate of record, per amendments 2026-05-22-A + 2026-05-22-B):**
 
 **Divergence metric:** **per-bucket sanity bounds applied to the snapshot-era 3a table from step 4.** No external comparison baseline.
 
 **Why sanity bounds rather than comparison:** the original comparison gate was designed to catch regime-transition surprises by holding the snapshot-era table to within 10pp of FSM-era cells. With the FSM-era table irrecoverable, the gate's discipline purpose (catch anomalous output before deploy) is preserved by sanity bounds on the snapshot-era output itself, derived from the precision shape established across round-7 / round-13 audit cycles.
 
-**Per-bucket checks (all must hold for the gate to pass):**
+**Outcome terminology (per amendment 2026-05-22-B clarification §3):**
+
+`BacktestResult.inconclusive` counts signals where `evaluate_signal` returned `correct=None` because `signal_idx + forward_days - 1 > len(df) - 1` — i.e., **the forward window extended past the end of the available OHLC data and no fwd_return could be computed**. It does **not** count low-volatility or low-magnitude moves. Under current `evaluate_signal`, every signal with sufficient forward data resolves either correct or incorrect.
+
+`n_decided := correct + incorrect` is the population on which bucket precision is computed. Cells where `n_decided` is small relative to total emit count are dominated by forward-window truncation — typical at dataset-end boundary under snapshot semantics (every day-of-presence re-emits, including final-window days that truncate).
+
+**Per-bucket checks (all must hold for the gate to pass, applied only to cells that clear the small-n threshold):**
 
 | Check | Threshold | Rationale |
 |---|---|---|
-| Bucket precision floor | No bucket < 15% | Below this, the bucket is likely picking up a broken signal pipeline (e.g., wrong direction labeled, ground truth mis-aligned), not a weak-but-genuine pattern. TWSE chart-pattern emit-set precision empirically clusters in the 20–50% range across prior audit cycles. |
-| Bucket precision ceiling | No bucket > 70% | Above this, the bucket is likely revealing a selection-bias bug (e.g., bucket inadvertently filtered by an outcome-correlated variable). TWSE chart-pattern precision ceiling is empirically lower than 70% in every prior cycle, including round-7's bucketed analysis. |
+| Small-n threshold (gate applicability) | `n_decided ≥ 20` | Below this, precision is dominated by inconclusive-rate variance (forward-window truncation) and small-population sampling noise. Cells below threshold are **gate-deferred — insufficient evidence** (not pass, not fail). Per amendment 2026-05-22-B §2: a noise-dominated precision verdict is not a discipline signal. |
+| Bucket precision floor | No bucket < 15% (gate-applicable cells only) | Below this, the bucket is likely picking up a broken signal pipeline (e.g., wrong direction labeled, ground truth mis-aligned), not a weak-but-genuine pattern. TWSE chart-pattern emit-set precision empirically clusters in the 20–50% range across prior audit cycles. |
+| Bucket precision ceiling | No bucket > 85% (gate-applicable cells only) | Above this, the bucket is likely revealing a selection-bias bug (e.g., bucket inadvertently filtered by an outcome-correlated variable). Derivation: cited FSM-era cell `ascending_wedge top-LF 72.7%` + ~10pp snapshot-vs-FSM regime-shift margin (empirically observed at 82.35% same-cell snapshot-era) → 82.7% lower bound on defensible ceiling, rounded up to 85% for safety. Per amendment 2026-05-22-B §1, this corrects amendment A's 70% ceiling, which was inconsistent with the evidence A itself cited. |
 | Coverage continuity | No pattern produces 0 signals in a bucket where prior backtest cycles produced > 100 signals for the same (pattern, bucket) cell | Absolute coverage drop in a previously-populated bucket is more suspicious than precision drift. Indicates either a bug in bucket assignment or in upstream filtering. |
 
-**Exclusion:** `rectangle` (neutral, no directional precision) is excluded from all three checks — same exclusion rationale as original §8.4.
+**Exclusions:** `rectangle` (neutral, no directional precision) is excluded from all checks. Cells with `n_decided < 20` are **gate-deferred** — reported separately, neither pass nor fail; see §2.4 propagation below.
 
 **On failure:** halt at step 5. Root-cause the failing bucket before resuming. Same escalation discipline as the original gate — fixing a check by loosening the bound is not in scope; the bound either reflects the empirical envelope or the empirical envelope shifted enough to warrant a follow-up amendment.
 
-**On all checks passing:** proceed to step 6. Snapshot-era 3a table is authoritative for §2.4 ranking calibration.
+**On gate-deferred status:** report the deferred cells alongside pass/fail in §8.4 output. Deferred cells do **not** block proceeding to step 6 by themselves — they propagate to §2.4 as non-authoritative ranking inputs (see §2.4 below). A pattern with **all** buckets deferred is a separate signal worth investigating (effectively no authoritative ranking input for that pattern) but does not auto-halt; flag for review.
+
+**On all checks passing (no failing cells, deferred cells allowed):** proceed to step 6. Snapshot-era 3a table is authoritative for §2.4 ranking calibration, with deferred-cell propagation applied.
 
 **Forward-compatibility:** when accumulated snapshot-era cycles establish a sufficient baseline (≥ 4 quarters of stable output), this gate may be revised back to a comparison gate against snapshot-era-historical cells. Out of scope for this amendment; deferred to a future amendment if and when the baseline accumulates.
 
