@@ -108,7 +108,7 @@ The eight lessons accumulated across phases:
 | P3 smoke-flag failure on --limit-stocks 50 | #3 *(candidate)* First-N smoke flags mask data-coverage bias | testing methodology |
 | Amendment 2026-05-22-A (P5 §8.4 first execution) | #4 Cross-regime baseline artifacts become unrecoverable once regime ends | cross-regime artifact |
 | Amendment 2026-05-22-B (P5 ceiling-arithmetic-error) | #5 Bound-setting amendments must round-trip against cited evidence | bound-setting |
-| P5 top-LF bucket sparseness observation | #6 *(candidate)* LF bucketing assumes sufficient population per bucket | structural data property |
+| P5/P6/P7 thin-rank patterns + top-LF sparseness + sweet-spot-bucket sparseness | #6 LF bucketing assumes sufficient population per bucket | structural data property |
 | Amendment 2026-05-22-C (P7 §8.5 first execution) | #7 Validation gates must verify the interaction mechanism, not just layer outputs | validation gate |
 | Amendment 2026-05-22-C gate first execution | #8 Lessons crystallized in amendments are archival, not procedural — they need active checklist invocation at decision points to bind | meta / procedural |
 
@@ -119,6 +119,22 @@ Amendment B explicitly named lesson #5 in its header. Amendment C, drafted in th
 This is not a one-off oversight. It is the cycle's clearest demonstration that lessons-as-text are not lessons-in-action. The remedy is procedural binding: explicit checklist invocation at decision points (per §4), tied to the workflow that reaches those decision points.
 
 **Implication for future cycles:** amendment headers should not be the primary lesson-storage mechanism. They are appropriate for archaeology (future readers can grep `Coupling-category lesson` to recover what was learned), but they cannot substitute for procedural artifacts that bind at decision time.
+
+### 5.1 Lesson #6 promotion + asymmetric criteria
+
+Lesson #6 (LF bucketing assumes sufficient population per bucket) is promoted from candidate to confirmed in this revision based on multi-instance evidence accumulated across P5/P6/P7:
+
+- **P5 top-LF undersupply** — gate-failure investigation showed 96 emits total in the LF [0.9, 2.0) bucket across all 6 patterns over 2 years. Mega-cap dominance (1605, 2303, 1802, 1303, 2408, 3481) — the bucket's natural population is a handful of TWSE blue chips, not a representative slice of the market.
+- **P6 thin-rank patterns** — descending_flag and ascending_flag each have only one gate-applicable bucket under the §8.4 (amendment-B-revised) n_decided ≥ 20 threshold. Under §2.4 sweet-spot ranking, the thin patterns have no within-pattern differentiation; ranking collapses to composite-only for them. This is not a bug; it is the LF bucketing's distribution interacting with §8.4's evidence-threshold.
+- **P7 sweet-spot bucket sparseness** — diamond_top's sweet-spot bucket [0.6, 0.9) emits ~0.3 candidates/day vs daily sell-slot capacity of 10. Cross-pattern top-N saturation forces out-of-bucket emits regardless of ranking preference (this is lesson #7's exact mechanism; #6 is the upstream root cause).
+
+The three instances together establish lesson #6 as a confirmed structural property of LF bucketing on TWSE data, not a one-off observation. Confirmed status warrants its own memory entry + reference from future bucket-design amendments.
+
+**Asymmetric promotion criteria — what stays as candidate:**
+
+Lesson #3 (first-N smoke flags mask data-coverage bias) remains a candidate. Single observed instance during the cycle (--limit-stocks 50 returning 0 emits because alphabetical first-225 TWSE stock_ids are short-history ETFs). The lesson is real but unconfirmed: one instance does not establish a recurring pattern.
+
+**Promotion threshold (informal):** candidate → confirmed when the same lesson surfaces in ≥ 2 independent contexts within or across cycles. Single-instance lessons stay candidate to avoid over-fitting to one observation. The threshold is heuristic, not strict — promotion is also appropriate when a single instance is structurally severe enough that the lesson is high-confidence even without replication. Lesson #5 was promoted on a single dramatic instance (the amendment B vs cited 72.7% cell mismatch) because the structural severity warranted it.
 
 ## 6. Application rule — when checklists trigger
 
