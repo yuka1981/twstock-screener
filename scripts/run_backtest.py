@@ -23,7 +23,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from twstock_screener.backtest import walk_forward_emitted
+from twstock_screener.backtest import LF_BUCKETS, walk_forward_emitted
 from twstock_screener.config import Settings
 from twstock_screener.db import finish_run, get_connection, start_run
 
@@ -42,6 +42,13 @@ def main() -> int:
         "--report-csv",
         type=str,
         default="data/backtest_fixtures/report.csv",
+    )
+    parser.add_argument(
+        "--report-3a-csv",
+        type=str,
+        default=None,
+        help="If set, write per-pattern × LF-bucket precision matrix "
+        "(snapshot-regime 3a table per spec §8.3 step 4) to this path.",
     )
     parser.add_argument(
         "--max-pattern-age-days",
@@ -107,6 +114,28 @@ def main() -> int:
                 r.recall * 100,
                 r.ground_truth_events,
             )
+
+    if args.report_3a_csv:
+        Path(args.report_3a_csv).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.report_3a_csv, "w") as f:
+            f.write(
+                "pattern,direction,bucket,signals,correct,incorrect,"
+                "inconclusive,precision\n"
+            )
+            for pattern_id, r in results.items():
+                for label, _, _ in LF_BUCKETS:
+                    b = r.bucket_breakdown.get(label, {})
+                    sig = b.get("signals", 0)
+                    cor = b.get("correct", 0)
+                    inc = b.get("incorrect", 0)
+                    incon = b.get("inconclusive", 0)
+                    decided = cor + inc
+                    prec = cor / decided if decided else 0.0
+                    f.write(
+                        f"{r.pattern},{r.direction},\"{label}\","
+                        f"{sig},{cor},{inc},{incon},{prec:.4f}\n"
+                    )
+        logger.info("3a table written to %s", args.report_3a_csv)
 
     finish_run(settings.db_path, run_id, "success")
     return 0

@@ -39,7 +39,26 @@ from twstock_screener.detectors import (
     BUY_PATTERNS,
     SELL_PATTERNS,
 )
-from twstock_screener.score import composite_score
+from twstock_screener.score import composite_score, liquidity_factor
+
+# Per-pattern × LF-bucket precision matrix (spec §8.3 step 4). Boundaries
+# named in spec amendment 2026-05-21 §2.4 — half-open lower, inclusive
+# fallback at upper end so LF == 2.0 maps to the top bucket.
+LF_BUCKETS: tuple[tuple[str, float, float], ...] = (
+    ("[0.0, 0.3)", 0.0, 0.3),
+    ("[0.3, 0.6)", 0.3, 0.6),
+    ("[0.6, 0.9)", 0.6, 0.9),
+    ("[0.9, 2.0)", 0.9, 2.0),
+)
+
+
+def _lf_bucket(lf: float) -> str:
+    for label, lo, hi in LF_BUCKETS:
+        if lo <= lf < hi:
+            return label
+    if lf >= LF_BUCKETS[-1][1]:
+        return LF_BUCKETS[-1][0]
+    return LF_BUCKETS[0][0]
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +82,11 @@ class BacktestResult:
     ground_truth_events: int = 0
     recall: float = 0.0
     months: list[str] = field(default_factory=list)
+    # Per-LF-bucket counts for the 3a precision matrix (spec §8.3 step 4).
+    # Shape: bucket_label → {"signals", "correct", "incorrect", "inconclusive"}.
+    # Bucket labels are LF_BUCKETS[i][0]. Always populated for all 4 buckets
+    # (zeros where the pattern had no emissions in that bucket).
+    bucket_breakdown: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def evaluate_signal(
@@ -174,6 +198,14 @@ def walk_forward_emitted(
         d.pattern_id: {"signals": 0, "correct": 0, "incorrect": 0, "inconclusive": 0}
         for d in ALL_DETECTORS
     }
+    # Bucket counts: pattern_id → bucket_label → counts dict.
+    bucket_counts: dict[str, dict[str, dict[str, int]]] = {
+        d.pattern_id: {
+            label: {"signals": 0, "correct": 0, "incorrect": 0, "inconclusive": 0}
+            for label, _, _ in LF_BUCKETS
+        }
+        for d in ALL_DETECTORS
+    }
 
     # In-memory snapshot-era episode tracking: (sid, pattern) → first_surfaced_date
     # for the current presence episode. Reset on departure-then-reappearance.
@@ -262,14 +294,19 @@ def walk_forward_emitted(
             if direction is None:
                 continue  # rectangle — non-directional, not scored
             counts[c.pattern]["signals"] += 1
+            bucket = _lf_bucket(liquidity_factor(c.avg_vol))
+            bucket_counts[c.pattern][bucket]["signals"] += 1
             df = histories[c.sid]
             ev = evaluate_signal(df, c.signal_idx, direction, forward_days)
             if ev["correct"] is True:
                 counts[c.pattern]["correct"] += 1
+                bucket_counts[c.pattern][bucket]["correct"] += 1
             elif ev["correct"] is False:
                 counts[c.pattern]["incorrect"] += 1
+                bucket_counts[c.pattern][bucket]["incorrect"] += 1
             else:
                 counts[c.pattern]["inconclusive"] += 1
+                bucket_counts[c.pattern][bucket]["inconclusive"] += 1
 
         prev_day_pairs = today_pairs
 
@@ -301,5 +338,6 @@ def walk_forward_emitted(
             false_positive_rate=fpr,
             ground_truth_events=gt,
             recall=recall,
+            bucket_breakdown=bucket_counts[pid],
         )
     return results
