@@ -18,10 +18,16 @@ import logging
 import sys
 from datetime import date
 
+from pathlib import Path
+
 from twstock_screener.analyze import run_analysis
+from twstock_screener.audit import format_audit_message, run_audit
 from twstock_screener.config import Settings
 from twstock_screener.db import finish_run, init_db, start_run
 from twstock_screener.holidays import is_trading_day
+from twstock_screener.notify import send_alert
+
+AUDIT_CONFIG_PATH = Path("config/audit_known_outliers.toml")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +59,28 @@ def main() -> int:
     run_id = start_run(settings.db_path, today, "analyze")
     try:
         rc = run_analysis(settings, today=today, dry_run=args.dry_run)
+        # Sub-cycle 29.2 (d) data-pipeline audit. Runs as a post-step;
+        # failure here does not affect the analyze run's rc. Alert sent
+        # to same Telegram chat as digest, prefixed with 🔍 DATA AUDIT.
+        try:
+            new_outliers = run_audit(settings.db_path, AUDIT_CONFIG_PATH, today)
+            if new_outliers and not args.dry_run:
+                msg = format_audit_message(new_outliers, today)
+                send_alert(
+                    settings.db_path,
+                    settings.telegram_chat_id,
+                    msg,
+                    today,
+                    stock_id="*",
+                    pattern="*",
+                    transition="data_audit",
+                    bot_token=settings.telegram_bot_token.get_secret_value(),
+                )
+        except Exception as audit_exc:
+            logger.exception(
+                "audit step failed (continuing — does not affect analyze rc): %s",
+                audit_exc,
+            )
         finish_run(
             settings.db_path,
             run_id,

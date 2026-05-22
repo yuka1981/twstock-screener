@@ -1,0 +1,54 @@
+# Audit allow-list (cycle 29.2 (d) periodic audit).
+#
+# Stocks listed here are suppressed from the daily audit alert. Each
+# entry matches on the composite key (stock_id, action_date) per
+# refinement note 3 — a second corporate action on a previously-known
+# stock will surface as a new outlier (alerts again).
+#
+# Status values:
+#   "purged"  — pre-event OHLC bars deleted from the database. Allow-list
+#               entry is permanent (the scan window's content will
+#               eventually no longer contain the discontinuity, but the
+#               allow-list match is harmless either way).
+#   "skip"    — discontinuity is a legitimate market event (large move,
+#               not a corporate action). The allow-list entry auto-
+#               expires when the event_date falls outside the audit
+#               lookback window (DEFAULT_LOOKBACK_DAYS = 60 calendar
+#               days). No manual cleanup needed.
+#   "pending" — flagged but action not yet decided. Treated as known for
+#               now (suppresses alerts) but should be reviewed
+#               periodically. If left as "pending" indefinitely, the
+#               status itself becomes a deferred-decision signal.
+#
+# To add a new entry:
+#   1. Verify via TWSE 公開資訊觀測站 whether the discontinuity is a real
+#      corporate action (per §4.4 coupling discipline — don't suppress
+#      alerts on legitimate market data).
+#   2. Choose status. Default to "pending" if undecided.
+#   3. Set action_date to the resumption / post-action date (the date
+#      that appears as event_date in the audit scan output).
+#   4. Include a note explaining the decision basis.
+
+[[outliers]]
+stock_id = "00631L"
+status = "purged"
+action_date = "2026-03-31"
+note = "20:1 split. Pre-2026-04-01 bars purged on 2026-05-22 (commit 113ea87)."
+
+[[outliers]]
+stock_id = "7780"
+status = "purged"
+action_date = "2026-01-19"
+note = "9:1 split. Pre-2026-01-19 bars purged on 2026-05-22 (commit 113ea87)."
+
+[[outliers]]
+stock_id = "00674R"
+status = "purged"
+action_date = "2026-04-22"
+note = "ETF unit consolidation after 6-day trading suspension. Pre-2026-04-22 bars purged on 2026-05-22 (commit f186889)."
+
+[[outliers]]
+stock_id = "00715L"
+status = "skip"
+action_date = "2026-03-09"
+note = "Legitimate Brent oil 2x leveraged ETF spike (weekend gap + 107M volume + extreme volatility 3 days after); NOT a corporate action. Auto-expired from 60d lookback on 2026-05-08 (entry retained for documentation — future grep recovers the dismissal rationale)."
