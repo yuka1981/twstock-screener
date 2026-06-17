@@ -22,20 +22,28 @@ def _date_str(d: Any) -> str:
 
 
 def _row_or_none(stock_id: str, d: Any) -> tuple[Any, ...] | None:
-    """Build an ohlc row tuple, or None if any required price is missing.
+    """Build an ohlc row tuple, or None if any required price is invalid.
 
-    twstock returns None for OHLC on halted/illiquid days; skip rather
-    than fail the entire stock fetch.
+    twstock returns None for OHLC on halted/illiquid days; skip rather than
+    fail the entire stock fetch. Some halted/suspended days instead arrive
+    as an all-zero placeholder bar — a non-positive price is invalid on
+    TWSE (min tick 0.01), and a zero close becomes a pivot valley that feeds
+    a zero denominator into downstream detector math (prod incident
+    2026-06-17: stock 1314's 2026-04-08 (0,0,0,0) bar crashed the analyze
+    run via ZeroDivisionError). Skip those exactly like None bars.
     """
     if d.open is None or d.high is None or d.low is None or d.close is None:
+        return None
+    o, h, lo, c = float(d.open), float(d.high), float(d.low), float(d.close)
+    if o <= 0 or h <= 0 or lo <= 0 or c <= 0:
         return None
     return (
         stock_id,
         _date_str(d.date),
-        float(d.open),
-        float(d.high),
-        float(d.low),
-        float(d.close),
+        o,
+        h,
+        lo,
+        c,
         int(d.capacity) if d.capacity is not None else 0,
         int(d.turnover) if d.turnover is not None else None,
     )

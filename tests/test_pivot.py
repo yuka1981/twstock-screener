@@ -102,3 +102,39 @@ def test_find_pivots_returns_empty_on_split_regardless_of_geometry():
     close = np.concatenate([pre, post])
     peaks, valleys = find_pivots(close)
     assert peaks == [] and valleys == []
+
+
+# --- Non-positive-close guard (prod incident 2026-06-17) ----------------
+#
+# A close of 0 (halted/suspended-day all-zero placeholder bar, e.g. stock
+# 1314's 2026-04-08 row) is the most extreme discontinuity possible, yet
+# the split-ratio guard's zero-safe nan-masking SILENTLY dropped it:
+# np.maximum(real, nan) -> nan, swallowed by np.nanmax, so max_adj stayed
+# under threshold. The zero valley then reached WBottomDetector and divided
+# by zero. find_pivots must reject any non-positive close outright.
+
+
+def test_find_pivots_returns_empty_on_nonpositive_close(caplog):
+    import logging
+    rng = np.random.default_rng(11)
+    close = 50 + np.cumsum(rng.standard_normal(60) * 0.3)
+    close[20] = 0.0  # halted-day placeholder bar
+
+    with caplog.at_level(logging.WARNING, logger="twstock_screener.pivot"):
+        peaks, valleys = find_pivots(close)
+
+    assert peaks == [] and valleys == []
+    assert any(
+        "non-positive" in r.message.lower()
+        or "halted" in r.message.lower()
+        or "suspended" in r.message.lower()
+        for r in caplog.records
+    ), f"expected non-positive-close warning; got: {[r.message for r in caplog.records]}"
+
+
+def test_find_pivots_returns_empty_on_negative_close():
+    rng = np.random.default_rng(3)
+    close = 50 + np.cumsum(rng.standard_normal(60) * 0.3)
+    close[10] = -5.0
+    peaks, valleys = find_pivots(close)
+    assert peaks == [] and valleys == []

@@ -222,7 +222,19 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         avg_vol = float(df["volume"].iloc[-20:].mean())
         last_close = float(df["close"].iloc[-1])
         for det in ALL_DETECTORS:
-            r = det.detect(df)
+            # Per-detector fault isolation (prod incident 2026-06-17): a
+            # single stock's bad data once made a detector raise, and with no
+            # guard here the whole run aborted — cron fired, the job "ran",
+            # but the daily digest silently never sent. One detector must
+            # never sink the entire digest: log and skip on any exception.
+            try:
+                r = det.detect(df)
+            except Exception:
+                logger.exception(
+                    "detector %s crashed on %s; skipping",
+                    getattr(det, "pattern_id", det.__class__.__name__), sid,
+                )
+                continue
             if r is None or not r.matched:
                 continue
             comp = composite_score(r.fit_score, det.confidence_weight, avg_vol)
