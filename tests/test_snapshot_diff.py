@@ -201,3 +201,46 @@ def test_writer_is_atomic_on_conflict(db):
     assert diff2.continuing == frozenset(pairs)
     rows = _all_rows(db)
     assert len(rows) == 1
+
+
+# --- carry_forward: crashed detector = unknown state, not absence --------
+#
+# Hardening after adversarial review (2026-06). When a detector crashes on
+# a stock, run_analysis passes that (sid, pattern) as carry_forward so it is
+# NOT reported departed and its episode clock is not reset on reappearance.
+
+
+def test_carry_forward_pair_not_departed_and_kept_alive(db):
+    d1 = date(2026, 5, 18)
+    d2 = date(2026, 5, 19)
+    write_snapshot_diff(db, d1, {("1314", "w_bottom")})
+    # d2: detector crashed on 1314/w_bottom -> absent from today_pairs, but
+    # carried forward as unknown rather than treated as departed.
+    diff = write_snapshot_diff(db, d2, set(), carry_forward={("1314", "w_bottom")})
+    assert ("1314", "w_bottom") not in diff.departed
+    rows = _all_rows(db)
+    assert len(rows) == 1, "carry-forward must not start a new episode row"
+    assert rows[0]["first_surfaced_date"] == d1.isoformat()
+    assert rows[0]["last_surfaced_date"] == d2.isoformat(), "kept alive to today"
+    assert pattern_episode_start(db, "1314", "w_bottom") == d1, "episode not reset"
+
+
+def test_without_carry_forward_pair_departs(db):
+    """Control: identical setup without carry_forward marks it departed."""
+    d1 = date(2026, 5, 18)
+    d2 = date(2026, 5, 19)
+    write_snapshot_diff(db, d1, {("1314", "w_bottom")})
+    diff = write_snapshot_diff(db, d2, set())
+    assert ("1314", "w_bottom") in diff.departed
+
+
+def test_carry_forward_unknown_pair_not_in_prior_is_noop(db):
+    """A crashed pair that was NOT present before is neither surfaced nor
+    departed (we simply don't know its state)."""
+    d1 = date(2026, 5, 18)
+    d2 = date(2026, 5, 19)
+    write_snapshot_diff(db, d1, {("2330", "m_top")})
+    diff = write_snapshot_diff(db, d2, {("2330", "m_top")}, carry_forward={("9999", "w_bottom")})
+    assert ("9999", "w_bottom") not in diff.newly_surfaced
+    assert ("9999", "w_bottom") not in diff.departed
+    assert not any(r["stock_id"] == "9999" for r in _all_rows(db))

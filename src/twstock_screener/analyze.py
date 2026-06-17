@@ -90,9 +90,14 @@ def _md_escape(s: str) -> str:
 def _load_recent_ohlc(db_path: Path, stock_id: str, days: int = 90) -> pd.DataFrame:
     con = get_connection(db_path)
     try:
+        # Drop non-positive (halted/suspended-day placeholder) bars at load
+        # time so a single bad row drops one day rather than blanking the
+        # whole stock via the pivot guard (adversarial review 2026-06). The
+        # filter is inside the query so a bad bar never consumes a LIMIT slot.
         rows = con.execute(
             "SELECT date, open, high, low, close, volume FROM ohlc "
-            "WHERE stock_id=? ORDER BY date DESC LIMIT ?",
+            "WHERE stock_id=? AND open>0 AND high>0 AND low>0 AND close>0 "
+            "ORDER BY date DESC LIMIT ?",
             (stock_id, days),
         ).fetchall()
     finally:
@@ -200,6 +205,14 @@ def _resolve_departures(
     return departures[:5]
 
 
+# A single detector crashing on this many stocks in one run indicates a code
+# bug, not one stock's bad data (production scans ~1277 stocks daily; a data-
+# driven crash hits 1-2 stocks, a logic bug hits ~all). At/above this count
+# the run aborts loud rather than silently clearing the pattern. See the
+# triage block in run_analysis.
+SYSTEMIC_FAILURE_THRESHOLD: int = 25
+
+
 def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     """Run daily analysis. dry_run=True is fully read-only (no DB writes)."""
     data_date = _max_data_date(settings.db_path)
@@ -211,6 +224,8 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         return 2
 
     raw_candidates: list[Candidate] = []
+    detector_failures: dict[str, int] = {}
+    failed_pairs: set[tuple[str, str]] = set()
     stocks = _list_active_stocks(settings.db_path)
     logger.info("analyzing %d stocks (data through %s) dry_run=%s",
                 len(stocks), data_date, dry_run)
@@ -227,13 +242,15 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
             # guard here the whole run aborted — cron fired, the job "ran",
             # but the daily digest silently never sent. One detector must
             # never sink the entire digest: log and skip on any exception.
+            pattern_id = getattr(det, "pattern_id", det.__class__.__name__)
             try:
                 r = det.detect(df)
             except Exception:
                 logger.exception(
-                    "detector %s crashed on %s; skipping",
-                    getattr(det, "pattern_id", det.__class__.__name__), sid,
+                    "detector %s crashed on %s; skipping", pattern_id, sid,
                 )
+                detector_failures[pattern_id] = detector_failures.get(pattern_id, 0) + 1
+                failed_pairs.add((sid, pattern_id))
                 continue
             if r is None or not r.matched:
                 continue
@@ -243,6 +260,24 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
                 fit_score=r.fit_score, composite=comp,
                 close=last_close, avg_volume_20d=avg_vol,
             ))
+
+    # Detector fault triage (hardening after adversarial review 2026-06).
+    # Isolated crashes are carried forward below so they never become false
+    # departures. A SYSTEMIC failure — a detector crashing on many stocks,
+    # which signals a code bug rather than one stock's bad data — must fail
+    # LOUD: abort before any snapshot write / digest send so it cannot
+    # silently clear an entire pattern's episode history while exiting 0.
+    if detector_failures:
+        worst = max(detector_failures.values())
+        logger.warning("detector failures this run: %s", detector_failures)
+        if worst >= SYSTEMIC_FAILURE_THRESHOLD:
+            logger.error(
+                "systemic detector failure (max %d crashes >= %d threshold) — "
+                "aborting before snapshot/send to avoid mass false departures; "
+                "snapshot state preserved. failures=%s",
+                worst, SYSTEMIC_FAILURE_THRESHOLD, detector_failures,
+            )
+            return 3
 
     by_stock: dict[str, set[str]] = {}
     for c in raw_candidates:
@@ -260,7 +295,9 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
         )
         return 0
 
-    diff: SnapshotDiff = write_snapshot_diff(settings.db_path, today, today_pairs)
+    diff: SnapshotDiff = write_snapshot_diff(
+        settings.db_path, today, today_pairs, carry_forward=failed_pairs,
+    )
     candidates = _apply_age_filter(
         settings.db_path, today, candidates, settings.max_pattern_age_days,
     )
