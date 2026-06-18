@@ -170,6 +170,60 @@ def test_fetch_skips_row_with_any_single_none_ohlc(tmp_path, none_field):
     assert rows[1]["turnover"] == 46_920_000_000
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("open", 0.0),
+        ("high", 0.0),
+        ("low", 0.0),
+        ("close", 0.0),
+        ("all", 0.0),   # all-zero placeholder bar (prod incident 1314 2026-04-08)
+        ("low", -1.0),  # negative price is invalid too
+    ],
+)
+def test_fetch_skips_row_with_nonpositive_price(tmp_path, field, value):
+    """A non-positive price is invalid on TWSE (min tick 0.01).
+
+    Halted/suspended days sometimes arrive as an all-zero placeholder bar
+    rather than None. Prod incident 2026-06-17: stock 1314's 2026-04-08 bar
+    was (0,0,0,0) vol 0; the zero close became a pivot valley and fed
+    abs(l1-l2)/min(l1,l2) with min==0 -> ZeroDivisionError -> the entire
+    analyze run aborted and the daily digest silently never sent. Such bars
+    must be skipped exactly like None bars.
+    """
+    db = tmp_path / "fetch.db"
+    init_db(db)
+
+    bad_ohlc = {"open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0}
+    if field == "all":
+        bad_ohlc = {k: 0.0 for k in bad_ohlc}
+    else:
+        bad_ohlc[field] = value
+
+    fake_data = [
+        _ohlc_row(date=date(2026, 4, 25), open=100.0, high=102.0, low=99.0,
+                  close=101.0, capacity=500_000_000, turnover=50_500_000_000,
+                  transaction=5_000),
+        _ohlc_row(date=date(2026, 4, 26), **bad_ohlc,
+                  capacity=0, turnover=None, transaction=0),
+        _ohlc_row(date=date(2026, 4, 28), open=101.0, high=103.0, low=100.0,
+                  close=102.0, capacity=460_000_000, turnover=46_920_000_000,
+                  transaction=4_500),
+    ]
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = fake_data
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(db, "1314", months=1, bucket=MagicMock())
+
+    assert result.success, f"expected success, got error: {result.error}"
+    assert result.rows_inserted == 2
+    assert result.rows_skipped == 1
+    con = get_connection(db)
+    dates = [r["date"] for r in con.execute(
+        "SELECT date FROM ohlc WHERE stock_id='1314' ORDER BY date")]
+    assert dates == ["2026-04-25", "2026-04-28"]
+
+
 def test_fetch_rows_skipped_zero_when_clean(tmp_path):
     """Clean OHLC data yields rows_skipped == 0."""
     db = tmp_path / "fetch.db"

@@ -84,6 +84,7 @@ def write_snapshot_diff(
     db_path: Path,
     today: date,
     today_pairs: set[tuple[str, str]],
+    carry_forward: set[tuple[str, str]] = frozenset(),
 ) -> SnapshotDiff:
     """Diff today's snapshot against the prior snapshot, persist changes.
 
@@ -97,6 +98,12 @@ def write_snapshot_diff(
     their existing row stays, last_surfaced_date frozen at the prior
     snapshot's date.
 
+    ``carry_forward`` holds pairs whose detector CRASHED today — state is
+    unknown, not absent (hardening after adversarial review 2026-06). Such
+    pairs are excluded from ``departed`` (no false departure); if they were
+    present in the prior snapshot their last_surfaced_date is bumped to today
+    so a one-run crash does not reset the episode clock on reappearance.
+
     Returns SnapshotDiff for digest-layer use (departures section, age
     filter input).
     """
@@ -109,7 +116,9 @@ def write_snapshot_diff(
 
         newly_surfaced = today_pairs - prior - previously_today
         continuing = (today_pairs & prior) | (today_pairs & previously_today)
-        departed = prior - today_pairs
+        # Crashed-but-previously-present pairs: keep alive, don't depart.
+        carried = (carry_forward & prior) - today_pairs
+        departed = prior - today_pairs - carry_forward
 
         for sid, pattern in sorted(newly_surfaced):
             con.execute(
@@ -119,7 +128,7 @@ def write_snapshot_diff(
                 (sid, pattern, today_iso, today_iso),
             )
 
-        for sid, pattern in sorted(continuing - previously_today):
+        for sid, pattern in sorted((continuing | carried) - previously_today):
             con.execute(
                 "UPDATE alert_state_current SET last_surfaced_date = ? "
                 "WHERE id = ("

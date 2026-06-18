@@ -28,6 +28,11 @@ class WBottomDetector:
             return self._no(df)
 
         l1, l2 = float(close[v1_idx]), float(close[v2_idx])
+        # Defense-in-depth: find_pivots already rejects non-positive closes,
+        # but a zero valley reaching here would divide by zero (prod incident
+        # 2026-06-17, stock 1314). Degrade to no-match rather than crash.
+        if min(l1, l2) <= 0:
+            return self._no(df)
         depth_diff = abs(l1 - l2) / min(l1, l2)
         if depth_diff > 0.03:
             return self._no(df)

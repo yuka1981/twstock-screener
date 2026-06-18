@@ -55,7 +55,24 @@ def find_pivots(
     if len(close) < distance * 2 or float(close.std()) == 0.0:
         return [], []
 
-    max_adj = _max_adjacent_ratio(np.asarray(close))
+    # Non-positive close = a halted/suspended-day all-zero placeholder bar
+    # (prod incident 2026-06-17, stock 1314 2026-04-08). This is the most
+    # extreme discontinuity possible, yet _max_adjacent_ratio's zero-safe
+    # nan-masking silently drops it (np.maximum(real, nan) -> nan, swallowed
+    # by nanmax), so the split-ratio guard below never fires. Reject it here
+    # before the zero close can become a valley feeding a zero denominator
+    # into downstream detector math.
+    arr = np.asarray(close, dtype=float)
+    if np.any(arr <= 0):
+        logger.warning(
+            "pivot detection: non-positive close encountered (min %.4f) — "
+            "likely a halted/suspended-day placeholder bar. Returning empty "
+            "pivots for graceful degradation.",
+            float(arr.min()),
+        )
+        return [], []
+
+    max_adj = _max_adjacent_ratio(arr)
     if max_adj > MAX_ADJACENT_RATIO_THRESHOLD:
         logger.warning(
             "pivot detection: max adjacent-bar ratio %.3f exceeds %.2f "
