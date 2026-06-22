@@ -34,11 +34,12 @@ def test_holiday_blocks_weekday(tmp_path):
 
 
 def test_refresh_holidays_parses_twse_response(tmp_path):
+    """TWSE OpenAPI emits ROC (民國) 7-digit dates, e.g. '1150101' = 2026-01-01."""
     db = tmp_path / "test.db"
     init_db(db)
     fake_payload = [
-        {"Name": "中華民國開國紀念日", "Date": "20260101", "Description": "放假一日"},
-        {"Name": "農曆除夕", "Date": "20260216", "Description": "放假一日"},
+        {"Name": "中華民國開國紀念日", "Date": "1150101", "Description": "放假一日"},
+        {"Name": "農曆除夕", "Date": "1150216", "Description": "放假一日"},
     ]
     with patch("twstock_screener.holidays._fetch_twse_holidays", return_value=fake_payload):
         n = refresh_holidays(db)
@@ -46,13 +47,40 @@ def test_refresh_holidays_parses_twse_response(tmp_path):
     con = get_connection(db)
     rows = list(con.execute("SELECT date, description, source FROM holidays ORDER BY date"))
     assert rows[0]["date"] == "2026-01-01"
+    assert rows[1]["date"] == "2026-02-16"
     assert rows[0]["source"] == "twse_openapi"
+
+
+def test_refresh_holidays_handles_dragon_boat_roc_date(tmp_path):
+    """Regression for 2026-06-22 false-stale outage: '1150619' = Dragon Boat
+    Festival 2026-06-19. The old parser required 8-digit Gregorian and silently
+    skipped every ROC row, leaving the holidays table permanently empty."""
+    db = tmp_path / "test.db"
+    init_db(db)
+    fake_payload = [{"Name": "端午節", "Date": "1150619", "Description": "放假一日"}]
+    with patch("twstock_screener.holidays._fetch_twse_holidays", return_value=fake_payload):
+        n = refresh_holidays(db)
+    assert n == 1
+    assert not is_trading_day(date(2026, 6, 19), db)
+
+
+def test_refresh_holidays_skips_unparseable_date(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    fake_payload = [
+        {"Name": "good", "Date": "1150619", "Description": "x"},
+        {"Name": "bad", "Date": "", "Description": "x"},
+        {"Name": "bad2", "Date": "2026-06-19", "Description": "x"},
+    ]
+    with patch("twstock_screener.holidays._fetch_twse_holidays", return_value=fake_payload):
+        n = refresh_holidays(db)
+    assert n == 1
 
 
 def test_refresh_idempotent(tmp_path):
     db = tmp_path / "test.db"
     init_db(db)
-    fake_payload = [{"Name": "test", "Date": "20260101", "Description": "x"}]
+    fake_payload = [{"Name": "test", "Date": "1150101", "Description": "x"}]
     with patch("twstock_screener.holidays._fetch_twse_holidays", return_value=fake_payload):
         refresh_holidays(db)
         refresh_holidays(db)  # second call, no error

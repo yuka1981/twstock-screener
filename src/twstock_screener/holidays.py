@@ -7,6 +7,8 @@ import httpx
 
 from twstock_screener.db import get_connection
 
+logger = logging.getLogger(__name__)
+
 TWSE_HOLIDAY_URL = (
     "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"
 )
@@ -19,6 +21,16 @@ def _fetch_twse_holidays() -> list[dict[str, str]]:
     return data
 
 
+def _roc_to_iso(raw: str) -> str | None:
+    """TWSE OpenAPI emits ROC (民國) dates as 7 digits YYYMMDD, where
+    YYY = Gregorian year - 1911 (e.g. '1150619' -> '2026-06-19'). Returns None
+    for anything that doesn't match so a format drift fails loud, not silent."""
+    if len(raw) != 7 or not raw.isdigit():
+        return None
+    year = int(raw[:3]) + 1911
+    return f"{year:04d}-{raw[3:5]}-{raw[5:7]}"
+
+
 def refresh_holidays(db_path: Path, raise_on_error: bool = False) -> int:
     """Fetch TWSE holiday schedule and upsert into local DB.
 
@@ -29,7 +41,6 @@ def refresh_holidays(db_path: Path, raise_on_error: bool = False) -> int:
     try:
         payload = _fetch_twse_holidays()
     except (httpx.HTTPError, ValueError) as exc:
-        logger = logging.getLogger(__name__)
         logger.warning("TWSE holiday API failed: %s. Keeping existing rows.", exc)
         if raise_on_error:
             raise
@@ -38,10 +49,10 @@ def refresh_holidays(db_path: Path, raise_on_error: bool = False) -> int:
     inserted = 0
     try:
         for item in payload:
-            raw_date = item.get("Date", "")
-            if len(raw_date) != 8:
+            iso = _roc_to_iso(item.get("Date", ""))
+            if iso is None:
+                logger.warning("skipping unparseable holiday Date=%r", item.get("Date"))
                 continue
-            iso = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
             desc = item.get("Name", "") or item.get("Description", "")
             cur = con.execute(
                 "INSERT OR IGNORE INTO holidays (date, description, source) "
