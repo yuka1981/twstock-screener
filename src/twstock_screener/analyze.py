@@ -130,6 +130,20 @@ def _max_data_date(db_path: Path) -> date | None:
     return date.fromisoformat(row["m"])
 
 
+def _expected_last_trading_day(today: date, db_path: Path) -> date:
+    """Most recent trading day strictly before ``today`` (holiday-aware).
+
+    Analyze runs in the morning before market open, so today's own bar isn't
+    available yet — the freshest data we can have is the prior trading day.
+    """
+    d = today - timedelta(days=1)
+    for _ in range(15):  # ponytail: 15-day cap clears LNY's ~9-day closure
+        if is_trading_day(d, db_path):
+            return d
+        d -= timedelta(days=1)
+    return d
+
+
 def _stock_names(db_path: Path, stock_ids: set[str]) -> dict[str, str]:
     if not stock_ids:
         return {}
@@ -219,8 +233,10 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     if data_date is None:
         logger.error("no OHLC data; abort")
         return 1
-    if (today - data_date).days > 3:
-        logger.error("data is stale (last %s, today %s)", data_date, today)
+    expected = _expected_last_trading_day(today, settings.db_path)
+    if data_date < expected:
+        logger.error("data is stale (last %s, expected through %s, today %s)",
+                     data_date, expected, today)
         return 2
 
     raw_candidates: list[Candidate] = []
