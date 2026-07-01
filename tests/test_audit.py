@@ -25,7 +25,7 @@ from twstock_screener.audit import (
     run_audit,
     scan_discontinuities,
     select_per_stock,
-)  # noqa: E402
+)
 
 # --- Fixtures --------------------------------------------------------------
 
