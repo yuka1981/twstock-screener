@@ -24,11 +24,30 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Literal
 
 from twstock_screener.analyze import _md_escape
 from twstock_screener.pivot import MAX_ADJACENT_RATIO_THRESHOLD
 
 logger = logging.getLogger(__name__)
+
+Kind = Literal["corp_action", "spike", "ambiguous"]
+
+# ≥ 這麼多個「市場有交易但本股缺席」的交易日 → 視為停牌型缺口(公司行動優先桶)。
+# 可調常數;調大 = 更保守(需更長停牌才判 corp_action)。
+K_HALT_SESSIONS: int = 2
+
+
+def classify(missed_sessions: int | None) -> Kind:
+    """由停牌交易日數導出分類。None = 計算不可得 → 誠實降級為 ambiguous
+    (不能用 0,0 代表真正的連續交易 spike)。"""
+    if missed_sessions is None:
+        return "ambiguous"
+    if missed_sessions >= K_HALT_SESSIONS:
+        return "corp_action"
+    if missed_sessions == 0:
+        return "spike"
+    return "ambiguous"
 
 
 @dataclass(frozen=True)
@@ -37,6 +56,12 @@ class Outlier:
     event_date: date  # date the discontinuity appeared (second of the two bars)
     ratio: float
     name: str = ""
+    prev_date: date | None = None       # 前一根(證據)
+    missed_sessions: int | None = None  # 停牌交易日數;None = 未算/失敗
+
+    @property
+    def kind(self) -> Kind:
+        return classify(self.missed_sessions)
 
 
 # Match longest detector lookback (60d for m_top/w_bottom).

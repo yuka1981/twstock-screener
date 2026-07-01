@@ -15,8 +15,10 @@ import pytest
 
 from twstock_screener.audit import (
     Outlier,
+    classify,
     filter_new,
     format_audit_message,
+    K_HALT_SESSIONS,
     load_known_outliers,
     scan_discontinuities,
 )
@@ -61,6 +63,31 @@ def _continuous_bars(start_close: float, n: int, start_date: str) -> list[tuple[
         ((d0 + timedelta(days=i)).date().isoformat(), start_close + i * 0.01)
         for i in range(n)
     ]
+
+
+# --- classify & Outlier kind -----------------------------------------------
+
+
+def test_classify_boundaries():
+    assert classify(None) == "ambiguous"   # 計算失敗降級
+    assert classify(0) == "spike"
+    assert classify(1) == "ambiguous"      # 1 <= n < K_HALT
+    assert classify(2) == "corp_action"    # K_HALT 邊界
+    assert classify(6) == "corp_action"
+    assert K_HALT_SESSIONS == 2
+
+
+def test_outlier_positional_construction_defaults_to_ambiguous():
+    """既有 test 用位置參數建構 Outlier;新欄位不得破壞,且無停牌證據時
+    kind 必為 ambiguous(不得誤標 spike)。"""
+    o = Outlier("X", date(2026, 1, 1), 20.0)
+    assert o.missed_sessions is None
+    assert o.kind == "ambiguous"
+
+
+def test_outlier_kind_derives_from_missed_sessions():
+    assert Outlier("A", date(2026, 1, 1), 3.0, missed_sessions=0).kind == "spike"
+    assert Outlier("A", date(2026, 1, 1), 3.0, missed_sessions=4).kind == "corp_action"
 
 
 # --- scan_discontinuities --------------------------------------------------
