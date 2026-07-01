@@ -147,9 +147,21 @@ git commit -m "feat: add classify() and evidence fields to Outlier"
 
 - [ ] **Step 1: Write the failing tests**
 
-在 `tests/test_audit.py` 的 `# --- scan_discontinuities ---` 區塊新增:
+先把 `_missed_sessions` 併進既有 from-import(`from twstock_screener.audit import ... _missed_sessions`),再於 `tests/test_audit.py` 的 `# --- scan_discontinuities ---` 區塊新增:
 
 ```python
+def test_missed_sessions_open_interval_and_failure_isolation():
+    """開區間計數(prev/curr 本身也是 fixture 內出現的市場日期,含週末)+
+    型別不符時隔離為 None(不拋),配合 classify(None)→ambiguous 完成降級鏈。"""
+    md = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+    assert _missed_sessions(md, "2026-01-05", "2026-01-06") == 0  # 相鄰,無中間
+    assert _missed_sessions(md, "2026-01-05", "2026-01-07") == 1  # 01-06
+    assert _missed_sessions(md, "2026-01-05", "2026-01-08") == 2  # 01-06/07
+    # 失敗隔離:date 物件混字串 → bisect 拋 TypeError → 捕捉並回 None(不拋)
+    assert _missed_sessions(md, date(2026, 1, 5), "2026-01-08") is None
+    assert classify(None) == "ambiguous"  # 降級鏈:None → ambiguous
+
+
 def test_scan_classifies_spike_as_missed_zero(ohlc_db: Path):
     """相鄰交易日的 5× 跳空(無停牌)→ missed=0 → spike。"""
     bars = _continuous_bars(100.0, 30, "2026-03-22")
@@ -185,8 +197,8 @@ def test_scan_classifies_halt_gap_as_corp_action(ohlc_db: Path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_audit.py::test_scan_classifies_spike_as_missed_zero tests/test_audit.py::test_scan_classifies_halt_gap_as_corp_action -v`
-Expected: FAIL(`AttributeError: 'Outlier' object has no attribute ... ` 為 None,或 `missed_sessions` 恆為 None → spike 測試的 `== 0` 失敗、corp_action 測試失敗)
+Run: `uv run pytest tests/test_audit.py -k "missed_sessions or classifies" -v`
+Expected: FAIL(`ImportError: cannot import name '_missed_sessions'`,或 `missed_sessions` 恆為 None → 分類斷言失敗)
 
 - [ ] **Step 3: Implement in `audit.py`**
 
@@ -201,12 +213,22 @@ import bisect
 ```python
 def _missed_sessions(market_dates: list[str], prev_s: str, curr_s: str) -> int | None:
     """開區間 (prev_s, curr_s) 內的市場交易日數,ISO 字串空間 bisect。
-    None = 計算失敗(降級為 ambiguous,絕不 crash 稽核)。"""
+    None = 計算失敗(降級為 ambiguous,絕不 crash 稽核)。
+
+    例外**只窄捕 TypeError**:唯一實際會炸的情境是 market_dates 與
+    prev/curr 不是同型(例如日後有人傳 date 物件混字串),bisect 比較不同
+    型別才拋 TypeError。此時隔離該筆(→ ambiguous)但用 logger.exception
+    **大聲記錄**,不讓真正的型別回歸靜默變 ambiguous(見 graceful-guard
+    盲點教訓)。其餘例外(邏輯 bug)照常往上拋,不吞。"""
     try:
         lo = bisect.bisect_right(market_dates, prev_s)
         hi = bisect.bisect_left(market_dates, curr_s)
         return max(0, hi - lo)
-    except Exception:  # pragma: no cover - 防禦性:字串異常也不得中斷稽核
+    except TypeError:
+        logger.exception(
+            "missed_sessions type error for (prev=%r, curr=%r) — degrading to ambiguous",
+            prev_s, curr_s,
+        )
         return None
 ```
 
@@ -453,33 +475,52 @@ git commit -m "feat: select actionable outlier per stock after allow-list filter
 - Test: `tests/test_audit.py`
 
 **Interfaces:**
-- Consumes: `Outlier.kind`、`_KIND_PRIORITY`(Task 3)、`_md_escape`
-- Produces: `format_audit_message(outliers, today) -> str`(每檔含 kind 標籤 + 證據;結尾依出現的 kind 分流;corp_action 置頂;全程 MarkdownV2 escape 不變)
+- Consumes: `Outlier.kind`、`Outlier.prev_date`、`_KIND_PRIORITY`(Task 3)、`_md_escape`
+- Produces:
+  - `_evidence(o: Outlier) -> str`(未 escape 層的證據字串;corp_action/ambiguous 附 `自 {prev_date}`)
+  - `format_audit_message(outliers, today) -> str`(每檔含 kind 標籤 + 證據;結尾依出現的 kind 分流;corp_action 置頂;全程 MarkdownV2 escape 不變)
 
 - [ ] **Step 1: Write the failing tests**
 
-在 `tests/test_audit.py` 新增:
+先把 `_evidence` 併進既有 from-import,再於 `tests/test_audit.py` 新增:
 
 ```python
+def test_evidence_renders_prev_date_at_unescaped_layer():
+    """_evidence 在未 escape 層產出證據字串;corp_action/ambiguous 須含 prev_date
+    (訊息層 _md_escape 會把日期的 '-' 轉義,故在此層直接驗較穩健)。"""
+    corp = Outlier("AAA", date(2026, 4, 22), 5.0,
+                   prev_date=date(2026, 4, 14), missed_sessions=4)
+    assert _evidence(corp) == "停牌 4 交易日 自 2026-04-14"
+    spike = Outlier("BBB", date(2026, 5, 10), 2.5,
+                    prev_date=date(2026, 5, 9), missed_sessions=0)
+    assert _evidence(spike) == "連續交易"
+    unknown = Outlier("CCC", date(2026, 5, 10), 2.5)  # missed None
+    assert _evidence(unknown) == "缺口未知"
+
+
 def test_format_audit_message_shows_kind_labels_and_advice():
     outliers = [
         Outlier("BBB", date(2026, 5, 10), 2.5, name="乙",
                 prev_date=date(2026, 5, 9), missed_sessions=0),    # spike
+        Outlier("CCC", date(2026, 5, 11), 2.0, name="丙",
+                prev_date=date(2026, 5, 10), missed_sessions=1),   # ambiguous
         Outlier("AAA", date(2026, 4, 22), 5.0, name="甲",
                 prev_date=date(2026, 4, 14), missed_sessions=4),   # corp_action
     ]
     msg = format_audit_message(outliers, today=date(2026, 5, 22))
     assert "疑似公司行動" in msg
     assert "疑似市場暴衝" in msg
+    assert "待判" in msg                     # ambiguous 標籤
     assert "停牌 4 交易日" in msg
-    # corp_action 必須排在 spike 之前
-    assert msg.index("AAA") < msg.index("BBB")
+    assert "人工判斷" in msg                  # ambiguous footer 分支被觸及
+    # 排序:corp_action(AAA)< ambiguous(CCC)< spike(BBB)
+    assert msg.index("AAA") < msg.index("CCC") < msg.index("BBB")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_audit.py::test_format_audit_message_shows_kind_labels_and_advice -v`
-Expected: FAIL(訊息無 "疑似公司行動" / "停牌 4 交易日";或排序斷言失敗)
+Run: `uv run pytest tests/test_audit.py -k "evidence or kind_labels" -v`
+Expected: FAIL(`ImportError: cannot import name '_evidence'`;或訊息無標籤/排序斷言失敗)
 
 - [ ] **Step 3: Implement in `audit.py`**
 
@@ -501,11 +542,14 @@ _KIND_ADVICE: dict[Kind, str] = {
 def _evidence(o: Outlier) -> str:
     if o.missed_sessions is None:
         return "缺口未知"
+    # prev_date = 停牌前最後一根,也是人工 purge 的起點,故 corp_action/
+    # ambiguous 都附上(spec §告警輸出 要求證據含 missed_sessions / prev_date)。
+    span = f" 自 {o.prev_date.isoformat()}" if o.prev_date is not None else ""
     if o.kind == "corp_action":
-        return f"停牌 {o.missed_sessions} 交易日"
+        return f"停牌 {o.missed_sessions} 交易日{span}"
     if o.kind == "spike":
         return "連續交易"
-    return f"缺 {o.missed_sessions} 交易日"
+    return f"缺 {o.missed_sessions} 交易日{span}"
 ```
 
 把 `format_audit_message` 改為:
@@ -560,10 +604,15 @@ git commit -m "feat: annotate audit alert with classification labels and per-kin
 - 分類規則 `classify`(None/0/1/≥2)→ Task 1 ✓
 - 資料模型(`prev_date`/`missed_sessions`/衍生 `kind`)→ Task 1 ✓
 - 事件選擇(filter 後 select,兩條遮蔽路徑)→ Task 3 ✓
-- 告警輸出(標籤 + 分流 + 排序 + escape)→ Task 4 ✓
-- 安全性質:分類純諮詢不消音(select 仍每股一筆但只換桶)✓;單檔失敗→None→ambiguous(`_missed_sessions` try/except + `classify(None)`)✓;allow-list 語彙不動(未觸 TOML)✓
+- 告警輸出(標籤 + 分流 + 排序 + escape + **prev_date 證據**)→ Task 4 `_evidence`(渲染 `自 {prev_date}`)✓
+- 安全性質:分類純諮詢不消音(select 仍每股一筆但只換桶)✓;單檔失敗→None→ambiguous(`_missed_sessions` **窄捕 TypeError + logger.exception**,不吞真 bug + `classify(None)`)✓;allow-list 語彙不動(未觸 TOML)✓
 - cutoff 不變式 → Task 2 註解 ✓
 - corp_action 誠實界定 → Task 4 告警文字「疑似」、此桶不掛自動化(classify-only)✓
+
+**Codex 計畫審查修正(B1–B3)已納入:**
+- B1 prev_date 渲染 → Task 4 `_evidence` + `test_evidence_renders_prev_date_at_unescaped_layer` ✓
+- B2 窄化例外 + log → Task 2 `_missed_sessions`(只捕 TypeError、`logger.exception`)✓
+- B3 補測試 → `test_missed_sessions_open_interval_and_failure_isolation`(邊界 0/1/2 + None 隔離)、Task 4 ambiguous 分支(待判/人工判斷 footer)✓
 
 **2. Placeholder scan:** 無 TBD/TODO;每個 code step 皆含完整程式碼與測試碼。
 
