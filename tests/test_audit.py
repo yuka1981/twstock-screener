@@ -21,7 +21,9 @@ from twstock_screener.audit import (
     filter_new,
     format_audit_message,
     load_known_outliers,
+    run_audit,
     scan_discontinuities,
+    select_per_stock,
 )  # noqa: E402
 
 # --- Fixtures --------------------------------------------------------------
@@ -284,3 +286,63 @@ def test_format_audit_message_escapes_markdown_v2():
         assert sp not in stripped, (
             f"unescaped {sp!r} would break Telegram MarkdownV2"
         )
+
+
+# --- select_per_stock and run_audit order -----------------------------------
+
+
+def test_run_audit_corp_action_not_masked_by_earlier_spike(ohlc_db: Path, tmp_path: Path):
+    """同股『早 spike + 晚 corp_action』→ 報 corp_action(不被早 spike 遮蔽)。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 60, "2026-03-23"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-03-24", 10.0),
+        ("2026-03-25", 50.0),   # 5× spike(相鄰日)→ missed 0
+        ("2026-03-26", 50.0),
+        # 停牌 03-27/28/29/30(MKT 有交易)
+        ("2026-03-31", 163.0),  # ~3.26× → corp_action
+        ("2026-04-01", 163.0),
+    ])
+    cfg = tmp_path / "empty.toml"
+    cfg.write_text("")
+
+    new = run_audit(ohlc_db, cfg, today=date(2026, 5, 10))
+    sus = [o for o in new if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].kind == "corp_action"
+    assert sus[0].event_date == date(2026, 3, 31)
+
+
+def test_run_audit_later_unknown_corp_action_not_masked_by_known(ohlc_db: Path, tmp_path: Path):
+    """同股『早 corp_action 已在 allow-list + 晚未知 corp_action』→ 報晚的未知者。
+    若選擇發生在 filter_new 之前(bug),早者會被選中再被 filter 丟掉 → 晚者被遮蔽。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 70, "2026-03-10"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-03-16", 6.0),
+        # 停牌 03-17/18/19
+        ("2026-03-20", 20.0),   # corp_action #1,event 03-20(將被 allow-list)
+        ("2026-03-23", 20.0),
+        # 停牌 03-24/25/26
+        ("2026-03-27", 66.0),   # corp_action #2,event 03-27(未知)
+    ])
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(
+        '[[outliers]]\n'
+        'stock_id = "SUS"\n'
+        'status = "purged"\n'
+        'action_date = "2026-03-20"\n'
+    )
+
+    new = run_audit(ohlc_db, cfg, today=date(2026, 5, 10))
+    sus = [o for o in new if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].event_date == date(2026, 3, 27)  # 晚的未知者
+    assert sus[0].kind == "corp_action"
+
+
+def test_select_per_stock_prefers_corp_action_then_earliest():
+    spike = Outlier("A", date(2026, 1, 5), 5.0, missed_sessions=0)
+    corp_early = Outlier("A", date(2026, 1, 10), 3.0, missed_sessions=4)
+    corp_late = Outlier("A", date(2026, 1, 20), 3.0, missed_sessions=4)
+    picked = select_per_stock([spike, corp_late, corp_early])
+    assert len(picked) == 1
+    assert picked[0].event_date == date(2026, 1, 10)  # corp_action 且最早

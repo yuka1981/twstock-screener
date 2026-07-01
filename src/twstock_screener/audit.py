@@ -207,6 +207,23 @@ def filter_new(
     return [o for o in outliers if (o.stock_id, o.event_date) not in known]
 
 
+_KIND_PRIORITY: dict[Kind, int] = {"corp_action": 0, "ambiguous": 1, "spike": 2}
+
+
+def select_per_stock(outliers: list[Outlier]) -> list[Outlier]:
+    """Reduce to one Outlier per stock: highest priority
+    (corp_action > ambiguous > spike), tie-break earliest event_date.
+    MUST run AFTER filter_new — otherwise an allow-listed event could be
+    selected then dropped, masking a later unknown one on the same stock."""
+    best: dict[str, Outlier] = {}
+    for o in outliers:
+        key = (_KIND_PRIORITY[o.kind], o.event_date)
+        cur = best.get(o.stock_id)
+        if cur is None or key < (_KIND_PRIORITY[cur.kind], cur.event_date):
+            best[o.stock_id] = o
+    return list(best.values())
+
+
 def format_audit_message(
     outliers: list[Outlier],
     today: date,
@@ -236,21 +253,21 @@ def run_audit(
     config_path: Path,
     today: date,
 ) -> list[Outlier]:
-    """End-to-end audit pipeline: scan → filter against allow-list →
-    return new outliers. Caller decides whether to send Telegram alert.
-
-    Logs the count + per-stock summary at INFO so cron logs show the
-    audit ran even when there are zero new outliers."""
-    outliers = scan_discontinuities(db_path, today=today)
+    """End-to-end audit: scan all candidates → filter allow-list →
+    reduce to one actionable outlier per stock. Caller decides whether to
+    send a Telegram alert."""
+    candidates = scan_discontinuities(db_path, today=today)
     known = load_known_outliers(config_path)
-    new = filter_new(outliers, known)
+    unknown = filter_new(candidates, known)      # drop known FIRST
+    new = select_per_stock(unknown)              # then one-per-stock by priority
     logger.info(
-        "audit: scanned %d in-window discontinuities, %d known allow-listed, "
-        "%d new", len(outliers), len(outliers) - len(new), len(new),
+        "audit: %d candidate discontinuities, %d known-filtered, %d new",
+        len(candidates), len(candidates) - len(unknown), len(new),
     )
     for o in new:
         logger.info(
-            "  NEW outlier: %s %s on %s ratio=%.2f×",
+            "  NEW outlier: %s %s on %s ratio=%.2f× kind=%s missed=%s",
             o.stock_id, o.name, o.event_date.isoformat(), o.ratio,
+            o.kind, o.missed_sessions,
         )
     return new
