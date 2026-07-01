@@ -209,6 +209,38 @@ def filter_new(
 
 _KIND_PRIORITY: dict[Kind, int] = {"corp_action": 0, "ambiguous": 1, "spike": 2}
 
+_KIND_LABEL: dict[Kind, str] = {
+    "corp_action": "疑似公司行動",
+    "spike": "疑似市場暴衝",
+    "ambiguous": "待判",
+}
+
+_KIND_ADVICE: dict[Kind, str] = {
+    "corp_action": "🏭 疑似公司行動(停牌數日)→ 查證後 purge + 加入 allow-list",
+    "spike": "📈 疑似市場暴衝(連續交易)→ 多半合法,考慮 skip",
+    "ambiguous": "❓ 短缺口 → 人工判斷",
+}
+
+
+def _evidence(o: Outlier) -> str:
+    """Render evidence for an outlier at the unescaped layer.
+
+    - None missed_sessions → "缺口未知"
+    - corp_action → "停牌 {missed} 交易日 自 {prev_date}" (if prev_date exists)
+    - spike → "連續交易"
+    - ambiguous → "缺 {missed} 交易日 自 {prev_date}" (if prev_date exists)
+
+    prev_date is rendered unescaped (message layer's _md_escape will escape hyphens).
+    """
+    if o.missed_sessions is None:
+        return "缺口未知"
+    span = f" 自 {o.prev_date.isoformat()}" if o.prev_date is not None else ""
+    if o.kind == "corp_action":
+        return f"停牌 {o.missed_sessions} 交易日{span}"
+    if o.kind == "spike":
+        return "連續交易"
+    return f"缺 {o.missed_sessions} 交易日{span}"
+
 
 def select_per_stock(outliers: list[Outlier]) -> list[Outlier]:
     """Reduce to one Outlier per stock: highest priority
@@ -228,23 +260,26 @@ def format_audit_message(
     outliers: list[Outlier],
     today: date,
 ) -> str:
-    """Build MarkdownV2-escaped Telegram body. Uses 🔍 DATA AUDIT prefix
-    per cycle 29.2 design — distinguishes from regular daily digest."""
+    """Build MarkdownV2-escaped Telegram body. 🔍 DATA AUDIT prefix per
+    cycle 29.2. Each outlier carries its classification + evidence; the
+    footer gives per-kind advice. corp_action sorts first (most actionable)."""
+    ordered = sorted(outliers, key=lambda o: (_KIND_PRIORITY[o.kind], o.event_date))
     header = _md_escape(f"🔍 DATA AUDIT  {today.isoformat()}")
-    intro = _md_escape(f"新發現 {len(outliers)} 檔資料斷層 (max_adj > {MAX_ADJACENT_RATIO_THRESHOLD}×):")
+    intro = _md_escape(
+        f"新發現 {len(ordered)} 檔資料斷層 (max_adj > {MAX_ADJACENT_RATIO_THRESHOLD}×):"
+    )
     lines = [header, "", intro, ""]
-    for i, o in enumerate(outliers, 1):
+    for i, o in enumerate(ordered, 1):
         display_name = o.name or "(未知)"
-        line = _md_escape(
-            f"{i}. [{o.stock_id}] {display_name}  "
-            f"ratio={o.ratio:.2f}×  {o.event_date.isoformat()}"
-        )
-        lines.append(line)
+        lines.append(_md_escape(
+            f"{i}. [{o.stock_id}] {display_name}  ratio={o.ratio:.2f}×  "
+            f"{o.event_date.isoformat()}  〔{_KIND_LABEL[o.kind]}·{_evidence(o)}〕"
+        ))
     lines.append("")
-    lines.append(_md_escape(
-        "動作建議：確認是否為公司行動 (拆股 / 合併 / redemption / 大型分配)；"
-        "如是，purge pre-event bars + 加入 audit_known_outliers.toml."
-    ))
+    lines.append(_md_escape("動作建議:"))
+    for k in ("corp_action", "ambiguous", "spike"):
+        if any(o.kind == k for o in ordered):
+            lines.append(_md_escape(_KIND_ADVICE[k]))
     return "\n".join(lines)
 
 

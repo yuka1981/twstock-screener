@@ -16,6 +16,7 @@ import pytest
 from twstock_screener.audit import (
     K_HALT_SESSIONS,
     Outlier,
+    _evidence,
     _missed_sessions,
     classify,
     filter_new,
@@ -286,6 +287,38 @@ def test_format_audit_message_escapes_markdown_v2():
         assert sp not in stripped, (
             f"unescaped {sp!r} would break Telegram MarkdownV2"
         )
+
+
+def test_evidence_renders_prev_date_at_unescaped_layer():
+    """_evidence 在未 escape 層產出證據字串;corp_action/ambiguous 須含 prev_date
+    (訊息層 _md_escape 會把日期的 '-' 轉義,故在此層直接驗較穩健)。"""
+    corp = Outlier("AAA", date(2026, 4, 22), 5.0,
+                   prev_date=date(2026, 4, 14), missed_sessions=4)
+    assert _evidence(corp) == "停牌 4 交易日 自 2026-04-14"
+    spike = Outlier("BBB", date(2026, 5, 10), 2.5,
+                    prev_date=date(2026, 5, 9), missed_sessions=0)
+    assert _evidence(spike) == "連續交易"
+    unknown = Outlier("CCC", date(2026, 5, 10), 2.5)  # missed None
+    assert _evidence(unknown) == "缺口未知"
+
+
+def test_format_audit_message_shows_kind_labels_and_advice():
+    outliers = [
+        Outlier("BBB", date(2026, 5, 10), 2.5, name="乙",
+                prev_date=date(2026, 5, 9), missed_sessions=0),    # spike
+        Outlier("CCC", date(2026, 5, 11), 2.0, name="丙",
+                prev_date=date(2026, 5, 10), missed_sessions=1),   # ambiguous
+        Outlier("AAA", date(2026, 4, 22), 5.0, name="甲",
+                prev_date=date(2026, 4, 14), missed_sessions=4),   # corp_action
+    ]
+    msg = format_audit_message(outliers, today=date(2026, 5, 22))
+    assert "疑似公司行動" in msg
+    assert "疑似市場暴衝" in msg
+    assert "待判" in msg                     # ambiguous 標籤
+    assert "停牌 4 交易日" in msg
+    assert "人工判斷" in msg                  # ambiguous footer 分支被觸及
+    # 排序:corp_action(AAA)< ambiguous(CCC)< spike(BBB)
+    assert msg.index("AAA") < msg.index("CCC") < msg.index("BBB")
 
 
 # --- select_per_stock and run_audit order -----------------------------------
