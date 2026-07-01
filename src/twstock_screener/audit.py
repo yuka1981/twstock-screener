@@ -18,10 +18,11 @@ here.
 """
 from __future__ import annotations
 
+import bisect
 import logging
 import sqlite3
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
@@ -71,6 +72,27 @@ class Outlier:
 DEFAULT_LOOKBACK_DAYS: int = 60
 
 
+def _missed_sessions(market_dates: list[str], prev_s: str, curr_s: str) -> int | None:
+    """開區間 (prev_s, curr_s) 內的市場交易日數,ISO 字串空間 bisect。
+    None = 計算失敗(降級為 ambiguous,絕不 crash 稽核)。
+
+    例外**只窄捕 TypeError**:唯一實際會炸的情境是 market_dates 與
+    prev/curr 不是同型(例如日後有人傳 date 物件混字串),bisect 比較不同
+    型別才拋 TypeError。此時隔離該筆(→ ambiguous)但用 logger.exception
+    **大聲記錄**,不讓真正的型別回歸靜默變 ambiguous(見 graceful-guard
+    盲點教訓)。其餘例外(邏輯 bug)照常往上拋,不吞。"""
+    try:
+        lo = bisect.bisect_right(market_dates, prev_s)
+        hi = bisect.bisect_left(market_dates, curr_s)
+        return max(0, hi - lo)
+    except TypeError:
+        logger.exception(
+            "missed_sessions type error for (prev=%r, curr=%r) — degrading to ambiguous",
+            prev_s, curr_s,
+        )
+        return None
+
+
 def scan_discontinuities(
     db_path: Path,
     today: date | None = None,
@@ -78,15 +100,29 @@ def scan_discontinuities(
     threshold: float = MAX_ADJACENT_RATIO_THRESHOLD,
 ) -> list[Outlier]:
     """Scan OHLC for adjacent-bar ratios > threshold within last
-    `lookback_days` calendar days of `today`. Returns one Outlier per
-    affected stock_id (the earliest in-window discontinuity)."""
+    `lookback_days` calendar days of `today`. Returns EVERY in-window
+    discontinuity per stock (per-stock reduction happens later in
+    run_audit, AFTER filtering the allow-list, so an allow-listed event
+    can't mask a later unknown one). Each Outlier carries prev_date and
+    missed_sessions (market trading days the stock was absent for)."""
     today = today or date.today()
     cutoff = (today - timedelta(days=lookback_days)).isoformat()
 
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
-        # Pull stocks that have at least 2 in-window bars.
+        # Market trading calendar for the window (single query, shared by
+        # all outliers). cutoff INVARIANT: same cutoff as the per-stock
+        # scan below — if the scan window ever widens to a pre-cutoff
+        # prev_date, this query MUST widen too or missed_sessions
+        # undercounts.
+        market_dates = [
+            r["date"] for r in con.execute(
+                "SELECT DISTINCT date FROM ohlc WHERE date >= ? ORDER BY date",
+                (cutoff,),
+            )
+        ]
+
         stock_ids = [
             r["stock_id"] for r in con.execute(
                 "SELECT stock_id, COUNT(*) AS n FROM ohlc "
@@ -102,6 +138,8 @@ def scan_discontinuities(
                 "WHERE stock_id=? AND date >= ? ORDER BY date",
                 (sid, cutoff),
             ).fetchall()
+            stock_name = ""
+            name_loaded = False
             for i in range(1, len(rows)):
                 p = float(rows[i - 1]["close"])
                 c = float(rows[i]["close"])
@@ -109,16 +147,23 @@ def scan_discontinuities(
                     continue
                 ratio = max(c / p, p / c)
                 if ratio > threshold:
-                    name_row = con.execute(
-                        "SELECT name FROM stocks WHERE stock_id=?", (sid,)
-                    ).fetchone()
+                    prev_s = rows[i - 1]["date"]
+                    curr_s = rows[i]["date"]
+                    if not name_loaded:  # lazy: only when a discontinuity exists
+                        nr = con.execute(
+                            "SELECT name FROM stocks WHERE stock_id=?", (sid,)
+                        ).fetchone()
+                        stock_name = nr["name"] if nr else ""
+                        name_loaded = True
                     outliers.append(Outlier(
                         stock_id=sid,
-                        event_date=date.fromisoformat(rows[i]["date"]),
+                        event_date=date.fromisoformat(curr_s),
                         ratio=ratio,
-                        name=name_row["name"] if name_row else "",
+                        name=stock_name,
+                        prev_date=date.fromisoformat(prev_s),
+                        missed_sessions=_missed_sessions(market_dates, prev_s, curr_s),
                     ))
-                    break  # one outlier per stock — first in-window event
+                    # NO break — collect ALL in-window discontinuities.
     finally:
         con.close()
     return outliers

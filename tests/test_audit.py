@@ -14,15 +14,15 @@ from pathlib import Path
 import pytest
 
 from twstock_screener.audit import (
+    K_HALT_SESSIONS,
     Outlier,
+    _missed_sessions,
     classify,
     filter_new,
     format_audit_message,
-    K_HALT_SESSIONS,
     load_known_outliers,
     scan_discontinuities,
-)
-
+)  # noqa: E402
 
 # --- Fixtures --------------------------------------------------------------
 
@@ -145,6 +145,51 @@ def test_scan_uses_threshold_constant(ohlc_db: Path):
     _insert_ohlc(ohlc_db, "TEST4", bars)
     outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 21), lookback_days=60)
     assert outliers == []
+
+
+def test_missed_sessions_open_interval_and_failure_isolation():
+    """開區間計數(prev/curr 本身也是 fixture 內出現的市場日期,含週末)+
+    型別不符時隔離為 None(不拋),配合 classify(None)→ambiguous 完成降級鏈。"""
+    md = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+    assert _missed_sessions(md, "2026-01-05", "2026-01-06") == 0  # 相鄰,無中間
+    assert _missed_sessions(md, "2026-01-05", "2026-01-07") == 1  # 01-06
+    assert _missed_sessions(md, "2026-01-05", "2026-01-08") == 2  # 01-06/07
+    # 失敗隔離:date 物件混字串 → bisect 拋 TypeError → 捕捉並回 None(不拋)
+    assert _missed_sessions(md, date(2026, 1, 5), "2026-01-08") is None
+    assert classify(None) == "ambiguous"  # 降級鏈:None → ambiguous
+
+
+def test_scan_classifies_spike_as_missed_zero(ohlc_db: Path):
+    """相鄰交易日的 5× 跳空(無停牌)→ missed=0 → spike。"""
+    bars = _continuous_bars(100.0, 30, "2026-03-22")
+    bars += [("2026-04-21", 500.0)]
+    bars += _continuous_bars(500.0, 29, "2026-04-22")
+    _insert_ohlc(ohlc_db, "TEST1", bars)
+
+    outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 21), lookback_days=60)
+    assert len(outliers) == 1
+    assert outliers[0].missed_sessions == 0
+    assert outliers[0].kind == "spike"
+
+
+def test_scan_classifies_halt_gap_as_corp_action(ohlc_db: Path):
+    """本股停牌 3 個交易日(同期市場 MKT 有交易)+ 3.26× 恢復 → corp_action。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 60, "2026-03-23"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-04-14", 6.60),
+        ("2026-04-15", 6.60),
+        # 停牌:2026-04-16 / 17 / 18(MKT 這幾天有交易)
+        ("2026-04-19", 21.50),
+        ("2026-04-20", 21.00),
+    ])
+
+    outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 10), lookback_days=60)
+    sus = [o for o in outliers if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].missed_sessions == 3      # MKT 交易於 04-16/17/18
+    assert sus[0].kind == "corp_action"
+    assert sus[0].event_date == date(2026, 4, 19)
+    assert sus[0].prev_date == date(2026, 4, 15)
 
 
 # --- load_known_outliers ---------------------------------------------------
