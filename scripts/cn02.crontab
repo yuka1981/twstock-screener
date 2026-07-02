@@ -3,6 +3,13 @@
 # overwrites the live crontab with this file. Every job shares $LOCK with
 # deploy.sh so no job starts while a deploy mutates the venv/checkout.
 SHELL=/bin/bash
+# Jobs are Taipei-time; system TZ is already Asia/Taipei but set it explicitly
+# so the schedule can't silently shift if the host TZ ever changes.
+CRON_TZ=Asia/Taipei
+# cron's default PATH omits ~/.local/bin. upload_db_to_drive.py shells out to a
+# bare `rclone` (installed at ~/.local/bin/rclone) via subprocess, so that dir
+# MUST be on PATH or the daily Drive backup fails with FileNotFoundError.
+PATH=/home/reidlin/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 UV=/home/reidlin/.local/bin/uv
 LOCK=/home/reidlin/stock/.deploy.lock
 

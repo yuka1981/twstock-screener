@@ -113,6 +113,12 @@ Watch the output for a few seconds:
   # expect: "The syntax of the crontab file was successfully checked."
   ```
 
+  Note: `crontab -n` = dry-run only on **Vixie cron** (the dev box). cn02 runs
+  **cronie** (RHEL9), where `-n` means "set cluster host" and errors with
+  "must be privileged to set host with -n" — it is NOT a validator there. On
+  cn02, validate by eye against the already-accepted live crontab (same env-line
+  style) rather than `crontab -n`.
+
   With the fallback, `.github/workflows/deploy.yml` and the `ghrunner`
   sudoers/user machinery are simply never installed on cn02 — leave the
   files in the repo (harmless, unused) or remove them in a follow-up PR.
@@ -271,6 +277,17 @@ path differences, schedule drift) — add/fix it in `scripts/cn02.crontab` on
 the dev box, open a PR, get it reviewed (CODEOWNERS — see §6), merge, then
 `git -C /home/reidlin/stock pull` on cn02 so the working copy has the
 reconciled file before the next step.
+
+> **Reconciled 2026-07-02 (env lines).** The pre-managed crontab set
+> `CRON_TZ=Asia/Taipei` and a `PATH` that includes `~/.local/bin`; the first
+> draft of `scripts/cn02.crontab` dropped both. Verified on cn02: the host TZ
+> is already `Asia/Taipei` (so `CRON_TZ` is belt-and-suspenders), but
+> `~/.local/bin` is **not** on cron's default PATH and
+> `upload_db_to_drive.py` shells out to a bare `rclone`
+> (`/home/reidlin/.local/bin/rclone`) — without the PATH entry the daily
+> Drive backup fails with `FileNotFoundError`. Both env lines were restored
+> to `scripts/cn02.crontab`; a `test_cn02_crontab_path_includes_local_bin`
+> regression guard now asserts the PATH entry.
 
 **Quiet-window install (do this before the first automated deploy).** The
 crontab currently live on cn02 predates the `flock`-wrapped version, so its

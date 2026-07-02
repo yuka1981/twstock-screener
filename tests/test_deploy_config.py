@@ -33,6 +33,19 @@ def test_every_cron_job_is_flock_wrapped():
     assert job_count >= 4, f"expected >= 4 cron jobs, found {job_count}"
 
 
+def test_cn02_crontab_path_includes_local_bin():
+    # Regression guard: upload_db_to_drive.py calls a bare `rclone` (at
+    # ~/.local/bin/rclone) via subprocess; cron's default PATH omits that dir,
+    # so the managed crontab must set PATH to include it or the Drive backup
+    # breaks silently on the first managed run.
+    for raw in _CRON.read_text(encoding="utf-8").splitlines():
+        if raw.startswith("PATH="):
+            assert "/home/reidlin/.local/bin" in raw, f"PATH must include ~/.local/bin: {raw!r}"
+            break
+    else:
+        raise AssertionError("cn02.crontab must set PATH (cron default omits ~/.local/bin)")
+
+
 _WF = _ROOT / ".github" / "workflows" / "deploy.yml"
 
 
