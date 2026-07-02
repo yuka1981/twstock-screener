@@ -21,9 +21,11 @@ executes exactly one command: `sudo -H -u reidlin
 /home/reidlin/stock/scripts/deploy.sh`. `deploy.sh` fast-forwards the checkout,
 syntax-checks itself, syncs dependencies, runs a smoke test, and reinstalls the
 managed crontab — all under a `flock` that serializes against the cron jobs. Any
-failure fires a Telegram alert through a stdlib-only, DoH-pinned relay (cn02 is
-outbound-only and reaches Telegram no other way). Nothing else in the repo runs
-automatically on cn02.
+failure invokes a stdlib-only, DoH-pinned Telegram alerter (cn02 is
+outbound-only and reaches Telegram no other way); if it cannot send, it spools
+and exits non-zero rather than failing silently. The deploy workflow runs
+nothing but `deploy.sh` — the only other automated activity on cn02 is the
+scheduled crontab jobs that `deploy.sh` installs (§2).
 
 ---
 
@@ -46,7 +48,10 @@ run code on it). Mitigations, all in place:
 - `deploy.yml`: `permissions: {}` (drops `GITHUB_TOKEN`), **zero third-party
   actions** (no `uses:`), trigger is `on: push: branches: [master]` **only** (no
   `pull_request`, no fork triggers), `runs-on: [self-hosted, cn02]`,
-  `concurrency` group with `cancel-in-progress: false`.
+  `concurrency` group with `cancel-in-progress: false`, and `timeout-minutes:
+  15` (a run that hits this cap is SIGKILL'd, so the `ERR` trap can't fire —
+  that failure appears only as a red Actions run, with **no** Telegram alert;
+  watch the Actions tab, not just Telegram).
 - OS-user isolation: the runner process is `ghrunner` (not reidlin). The only
   privileged thing it can do is the single sudoers rule:
   ```
@@ -58,7 +63,10 @@ run code on it). Mitigations, all in place:
 - Branch ruleset `protect-deploy-machinery` (id `18413779`, all branches):
   Restrict creations + Require PR (approvals 1 + CODEOWNERS) + Block force
   pushes, with `@yuka1981`/Repository-admin in the bypass list.
-- `.github/CODEOWNERS` maps the deploy machinery to `@yuka1981`.
+- `.github/CODEOWNERS` requires `@yuka1981` review on `deploy.yml`, `CODEOWNERS`,
+  `scripts/deploy.sh`, and `scripts/cn02.crontab`. **Gap:**
+  `scripts/notify_deploy.py` (runs as reidlin, reads the bot token) is *not*
+  CODEOWNERS-owned — adding it is cheap defense-in-depth (§7).
 
 ### deploy.sh flow (`scripts/deploy.sh`)
 `set -Eeuo pipefail` (the `-E` matters: it makes the `ERR` trap fire inside
@@ -242,8 +250,9 @@ ssh reidlin@s5xq-cn02 'sudo systemctl status actions.runner.yuka1981-twstock-scr
 - Read the run log: `gh run view <id> --log-failed`.
 - The box is left on the previous good checkout only if `git pull` failed; if a
   later step failed, the pull already advanced the tree — re-run after fixing.
-- `deploy.sh` backed up the prior crontab via `crontab -l` before any install;
-  the pre-rollout snapshot is at `~/crontab-backups/`.
+- `deploy.sh` backs up the prior crontab to `~reidlin/.crontab.bak.<timestamp>`
+  before each install (`scripts/deploy.sh` `install_crontab`); the one-off manual
+  pre-rollout snapshot is separately at `~reidlin/crontab-backups/`.
 
 ### Add / change a cron job
 Edit `scripts/cn02.crontab` (keep line 1 sentinel, keep the `flock -n $LOCK`
@@ -271,6 +280,8 @@ repos/yuka1981/twstock-screener/actions/runners/{registration-token,remove-token
   trivial commits.
 - ⚠️ CODEOWNERS review is **advisory for the owner** (admin bypass). To make it a
   true two-person gate, add a second reviewer and empty the bypass list.
+- ◻️ `scripts/notify_deploy.py` is not in CODEOWNERS despite running as reidlin
+  and reading the bot token — consider adding it for defense-in-depth.
 - ◻️ Optional not-done: nothing outstanding from §7. The `svc.sh` user-service
   fallback path in the runbook was not needed (root system-service install
   worked).
