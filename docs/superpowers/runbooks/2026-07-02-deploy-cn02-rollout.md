@@ -307,6 +307,15 @@ flock -w 60 /home/reidlin/stock/.deploy.lock -c \
 
 ### 6.1 All-branches ruleset
 
+> **STATUS — APPLIED 2026-07-02.** Ruleset `protect-deploy-machinery`
+> (id `18413779`) created Active via API with the **recommended default**:
+> `RepositoryRole` admin (`@yuka1981`) in the bypass list, `bypass_mode:
+> always`, covering all rules. Verified admin is not locked out (a scratch
+> branch create+delete succeeded through the bypass). Accepted residual
+> risk: CODEOWNERS review is advisory for the owner (see the tradeoff
+> below). The manual UI steps that follow are retained as the reference
+> for how the ruleset is shaped / how to reproduce or amend it.
+
 `https://github.com/yuka1981/twstock-screener/settings/rules/rulesets` → **New ruleset** → **New branch ruleset**:
 
 - **Ruleset name**: `protect-deploy-machinery`
