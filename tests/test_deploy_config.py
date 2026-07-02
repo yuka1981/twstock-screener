@@ -26,3 +26,31 @@ def test_every_cron_job_is_flock_wrapped():
         # so _SCHED skips them; only real job lines are asserted.
         if _SCHED.match(line):
             assert "flock" in line, f"cron job not flock-wrapped: {line!r}"
+
+
+_WF = _ROOT / ".github" / "workflows" / "deploy.yml"
+
+
+def test_deploy_workflow_security_invariants():
+    text = _WF.read_text(encoding="utf-8")
+    assert "permissions: {}" in text, "workflow must drop the GITHUB_TOKEN"
+    assert "uses:" not in text, "no third-party actions on the self-hosted runner"
+    assert "[self-hosted, cn02]" in text, "must pin the cn02 self-hosted runner"
+    assert "cancel-in-progress: false" in text
+    # trigger is push:master only — must not react to pull_request
+    assert "pull_request" not in text
+    assert "branches: [master]" in text
+    # scoped invocation as reidlin (not running as the runner user)
+    assert "sudo -H -u reidlin" in text
+
+
+_SH = _ROOT / "scripts" / "deploy.sh"
+
+
+def test_deploy_sh_critical_invariants():
+    sh = _SH.read_text(encoding="utf-8")
+    assert "set -Eeuo pipefail" in sh, "-E (errtrace) required so ERR trap fires inside main()"
+    # flock must be acquired before git pull (else a cron job can start mid-pull/sync)
+    assert sh.index("flock -w 300 9") < sh.index("git pull"), "flock must precede git pull"
+    assert "TWSTOCK_DB_PATH=:memory:" in sh and 'pytest -m "not slow"' in sh, "deterministic smoke, exclude prod-DB slow bench"
+    assert "--frozen --extra dev" in sh, "dev extra installs pytest"

@@ -1,0 +1,6 @@
+# Deploy machinery runs on the cn02 production host — require owner review.
+# Enforced by the all-branches ruleset (see rollout runbook).
+/.github/workflows/    @yuka1981
+/.github/CODEOWNERS    @yuka1981
+/scripts/deploy.sh     @yuka1981
+/scripts/cn02.crontab  @yuka1981
