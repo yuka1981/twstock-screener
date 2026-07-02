@@ -18,6 +18,7 @@ def test_cn02_crontab_has_managed_sentinel():
 
 
 def test_every_cron_job_is_flock_wrapped():
+    job_count = 0
     for raw in _CRON.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -25,7 +26,11 @@ def test_every_cron_job_is_flock_wrapped():
         # env-assignment lines (UV=..., LOCK=...) don't match a cron schedule,
         # so _SCHED skips them; only real job lines are asserted.
         if _SCHED.match(line):
-            assert "flock" in line, f"cron job not flock-wrapped: {line!r}"
+            job_count += 1
+            assert "flock -n" in line, f"cron job not flock -n wrapped: {line!r}"
+    # Guards against a vacuous pass (all job lines deleted) and against the
+    # count silently dropping below the 4 jobs the crontab defines.
+    assert job_count >= 4, f"expected >= 4 cron jobs, found {job_count}"
 
 
 _WF = _ROOT / ".github" / "workflows" / "deploy.yml"

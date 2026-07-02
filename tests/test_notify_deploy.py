@@ -89,8 +89,18 @@ def test_send_failure_spools_and_no_marker(nd, tmp_path, monkeypatch, capsys):
 
 
 def test_missing_config_returns_one(nd, tmp_path, monkeypatch):
+    # Hermetic: clear both prefixed and bare names so the missing-config
+    # branch is reached regardless of ambient env (e.g. a dev/CI shell with
+    # real creds exported), and stub post_telegram as a network trip-wire —
+    # if main() ever reached it, the test would fail instead of silently
+    # hitting the live Telegram API.
+    monkeypatch.delenv("TWSTOCK_TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TWSTOCK_TELEGRAM_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setattr(
+        nd, "post_telegram", lambda *a, **k: pytest.fail("post_telegram must not be called")
+    )
     empty = tmp_path / "empty.env"
     empty.write_text("", encoding="utf-8")
     rc = nd.main(["--env-file", str(empty), "--sha", "x", "--message", "m", "--today", "2026-07-02"])
