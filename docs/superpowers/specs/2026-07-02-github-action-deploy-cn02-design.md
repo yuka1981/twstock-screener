@@ -154,8 +154,9 @@ main "$@"
 - **零專案 import、只用標準庫**:`urllib.request` 發 Telegram POST,沿用
   `notify.py` 的 DoH-pinned-IP 手法(但 stdlib,非 httpx)。→ 以 SYSTEM
   `python3` 執行,`uv sync` 弄壞專案 venv 也照樣能通知。
-- **自己讀設定**:`--env-file $PROJECT/.env` 解析 `TELEGRAM_BOT_TOKEN` /
-  `TELEGRAM_CHAT_ID`(專案是從 `.env` 經 `Settings` 取,不保證在 shell env)。
+- **自己讀設定**:`--env-file $PROJECT/.env` 解析 **`TWSTOCK_TELEGRAM_BOT_TOKEN` /
+  `TWSTOCK_TELEGRAM_CHAT_ID`**(專案 `Settings` 用 `env_prefix="TWSTOCK_"`,`.env`
+  即這組前綴名;裸名 `TELEGRAM_*` 作為 fallback)。不保證在 shell env,故直接讀 `.env`。
 - **去重用 marker 檔**:`~/.deploy-notify/<date>-<sha>`(與 `notify.py` 的
   `date+sha` 語意一致,非純 sha——避免同一 commit 日後合法重試被永久抑制)。
   → 部署**不寫 `notification_log`**,故 deploy 真正 DB-write-free。

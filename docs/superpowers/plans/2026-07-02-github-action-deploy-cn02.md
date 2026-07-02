@@ -17,7 +17,7 @@
 - Repo 是 **PUBLIC** → runner 以**專用低權限使用者 `ghrunner`** 執行,經 sudoers 只准一條無參數命令 `/home/reidlin/stock/scripts/deploy.sh`;`deploy.sh` 由 `reidlin` 擁有、`ghrunner` **不可寫**。
 - deploy.yml:`permissions: {}`、**無任何 `uses:`(零第三方 action)**、`on: push: branches: [master]`、`runs-on: [self-hosted, cn02]`、`concurrency: {group: deploy-cn02, cancel-in-progress: false}`、`timeout-minutes: 15`。
 - `deploy.sh`:`set -Eeuo pipefail`(`-E` 讓 ERR trap 傳入 function);flock **從 `git pull` 前**上鎖涵蓋整段;smoke = `TWSTOCK_DB_PATH=:memory: uv run pytest -m "not slow"`;`uv sync --frozen --extra dev`(pytest 在 `[optional-dependencies].dev`)。
-- `notify_deploy.py`:**stdlib-only、零專案 import、跑 system python3**;自己解析 `--env-file` 取 `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`;去重 marker `~/.deploy-notify/<date>-<sha>`;送失敗 → stderr + spool,**不寫 `notification_log`**。
+- `notify_deploy.py`:**stdlib-only、零專案 import、跑 system python3**;自己解析 `--env-file` 取 **`TWSTOCK_TELEGRAM_BOT_TOKEN`/`TWSTOCK_TELEGRAM_CHAT_ID`**(專案 `env_prefix="TWSTOCK_"`;裸名 fallback);去重 marker `~/.deploy-notify/<date>-<sha>`;送失敗 → stderr + spool,**不寫 `notification_log`**。（注:本計畫下方 Task 1 內嵌程式碼示範用裸名,實作已於 fix commit 改為 TWSTOCK_ 前綴優先——以 committed code 為準。)
 - `cn02.crontab`:sentinel header `# MANAGED-BY: repo scripts/cn02.crontab`;每條 job 包同一把 flock;reidlin 路徑。
 - 部署不動 DB/`data/`/`.env` 內容。測試不得觸網(全 mock)。
 - Repo owner = `@yuka1981`。
