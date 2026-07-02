@@ -1,3 +1,5 @@
+# DEPRECATED — superseded by scripts/cn02.crontab (reidlin per-user, flock-wrapped).
+# Kept for historical reference of the original /etc/cron.d layout.
 # /etc/cron.d/twstock-screener
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

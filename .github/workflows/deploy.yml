@@ -1,0 +1,17 @@
+name: deploy-cn02
+on:
+  push:
+    branches: [master]
+permissions: {}
+concurrency:
+  group: deploy-cn02
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: [self-hosted, cn02]
+    timeout-minutes: 15
+    steps:
+      - name: Run scoped deploy as reidlin
+        # -H sets $HOME=/home/reidlin so deploy.sh's $HOME/stock resolves.
+        # No actions/checkout: deploy.sh pulls the production checkout itself.
+        run: sudo -H -u reidlin /home/reidlin/stock/scripts/deploy.sh
