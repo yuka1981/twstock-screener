@@ -9,9 +9,11 @@ to leave running.
 **Repo**: `git@github.com:yuka1981/twstock-screener.git` (public)
 **Host**: s5xq-cn02, production user `reidlin`, project at `/home/reidlin/stock`
 
-Everything in this runbook runs **on cn02**, as a human with an interactive
-shell (either logged in as `reidlin` with `sudo`, or as `root`). None of it
-runs from this dev box.
+Most steps in this runbook run **on cn02**, as a human with an interactive
+shell (either logged in as `reidlin` with `sudo`, or as `root`). Steps that
+say "on the dev box" — the §1/§7 fallback cron commit, the crontab
+reconciliation PR in §5, and the `gh`/merge commands in §7.1 — run from your
+workstation instead.
 
 ## Ordering — read before starting
 
@@ -69,16 +71,21 @@ Watch the output for a few seconds:
   then tear the test runner down and proceed to §2:
 
   ```bash
-  ./config.sh remove --token <TOKEN_FROM_GITHUB_UI>
+  # Removal tokens are a different, separate token from the registration
+  # token above — also single-use/short-lived. Fetch a fresh one from:
+  #   https://github.com/yuka1981/twstock-screener/settings/actions/runners
+  # (click the runner → Remove). The registration token cannot be reused here.
+  ./config.sh remove --token <REMOVAL_TOKEN_FROM_GITHUB_UI>
   cd ~ && rm -rf ~/gh-runner-gate-test
   ```
 
 - **FAIL**: connection errors, timeouts, TLS/DNS failures, or it never
   reaches "Listening for Jobs". **Stop. Do not proceed to §2–§4.** Tear down
-  the same way, then implement the spec §7 fallback instead:
+  the same way (fresh removal token, same caveat as above), then implement
+  the spec §7 fallback instead:
 
   ```bash
-  ./config.sh remove --token <TOKEN_FROM_GITHUB_UI> 2>/dev/null || true
+  ./config.sh remove --token <REMOVAL_TOKEN_FROM_GITHUB_UI> 2>/dev/null || true
   cd ~ && rm -rf ~/gh-runner-gate-test
   ```
 
@@ -88,13 +95,22 @@ Watch the output for a few seconds:
   polling entry added to `scripts/cn02.crontab` (commit it on the dev box,
   then re-run §5's install step on cn02):
 
+  cron has **no line-continuation** (`man 5 crontab`: the command runs "up
+  to a newline") — this entry must be written as ONE physical line, or
+  `crontab` rejects the entire file:
+
   ```
   # Polling fallback (spec §7) — used because the runner endpoint isn't
   # reachable from cn02. Same deploy.sh, different trigger.
-  */10 * * * * flock -n $LOCK -c 'cd ~/stock && \
-    prev=$(git rev-parse HEAD) && git fetch --quiet origin master && \
-    new=$(git rev-parse origin/master) && \
-    [ "$prev" != "$new" ] && scripts/deploy.sh >> logs/deploy-poll.log 2>&1; true'
+  */10 * * * * flock -n $LOCK -c 'cd ~/stock && prev=$(git rev-parse HEAD) && git fetch --quiet origin master && [ "$prev" != "$(git rev-parse origin/master)" ] && scripts/deploy.sh >> logs/deploy-poll.log 2>&1; true'
+  ```
+
+  Verify it parses before installing (dry-run only, does not install
+  anything):
+
+  ```bash
+  crontab -n /path/to/scratch-copy-of-cn02.crontab
+  # expect: "The syntax of the crontab file was successfully checked."
   ```
 
   With the fallback, `.github/workflows/deploy.yml` and the `ghrunner`
@@ -162,6 +178,21 @@ sudo -u ghrunner test -w /home/reidlin/stock/scripts/deploy.sh \
 sudo -u ghrunner sudo -l
 # expect exactly one line:
 #   (reidlin) NOPASSWD: /home/reidlin/stock/scripts/deploy.sh
+```
+
+**Same check for `cn02.crontab`.** `deploy.sh`'s `install_crontab` runs
+`crontab "$f"` (as `reidlin`, via the sudoers rule above) against
+`scripts/cn02.crontab` on every successful deploy — if `ghrunner` could
+write that file, it would be arbitrary cron injection running as `reidlin`,
+bypassing the one-command sudoers scoping entirely:
+
+```bash
+ls -l /home/reidlin/stock/scripts/cn02.crontab
+# expect: -rw-r--r--  1 reidlin reidlin ... cn02.crontab   (owner=reidlin, group/other: no write bit)
+
+sudo -u ghrunner test -w /home/reidlin/stock/scripts/cn02.crontab \
+  && echo "FAIL: ghrunner can write cn02.crontab" \
+  || echo "OK: ghrunner cannot write cn02.crontab"
 ```
 
 ---
@@ -289,12 +320,19 @@ flock -w 60 /home/reidlin/stock/.deploy.lock -c \
     on `push` to itself with `runs-on: [self-hosted, cn02]` — ref creation
     with commits happens in a single `git push`, before any PR review could
     apply.
-  - ☑ **Require a pull request before merging**
-    - ☑ **Require review from Code Owners**
+  - ☑ **Require a pull request before merging** — this applies to *every*
+    PR into a matched branch, regardless of which files it touches.
+    - ☑ **Require review from Code Owners** — an *additional* gate that
+      only activates for PRs touching a CODEOWNERS-mapped path (below); it
+      does not narrow or replace "Required approvals: 1", which already
+      applies repo-wide.
     - Required approvals: 1
   - ☑ **Block force pushes**
-- Bypass list: leave empty, or **Repository admin** only if you need an
-  emergency override — see the caveat below before adding it.
+- **Bypass list — decide and set this now, before merging anything** (see
+  the mandatory pre-merge decision below, not an optional emergency
+  override): add **Repository admin**, or `@yuka1981` specifically, to the
+  bypass list for **both** "Require a pull request before merging" *and*
+  "Restrict creations".
 
 `.github/CODEOWNERS` already maps the protected paths to the owner:
 
@@ -305,22 +343,47 @@ flock -w 60 /home/reidlin/stock/.deploy.lock -c \
 /scripts/cn02.crontab  @yuka1981
 ```
 
-Any PR touching those paths requires `@yuka1981`'s review, regardless of who
-else approves.
+Any PR touching those paths additionally requires `@yuka1981`'s review, on
+top of the repo-wide "Required approvals: 1" above.
 
-**Solo-maintainer caveat (real, not hypothetical):** GitHub does not let an
-account approve its own pull request to satisfy a required review. Since
-`@yuka1981` is both the sole author and the sole CODEOWNERS reviewer, a PR
-that only touches CODEOWNERS-protected paths and is opened by `@yuka1981`
-**cannot be merged** through the normal required-review path. Pick one before
-relying on this ruleset day-to-day:
+**Solo-maintainer lockout — MANDATORY, resolve before merging anything
+(including this rollout PR), not optional day-to-day guidance.** Per the
+"Ordering" note at the top of this runbook, §6 must be complete *before*
+the `feat/deploy-cn02` PR is merged — an unresolved ruleset here blocks
+that very merge. This is broader than just the four CODEOWNERS paths; two
+separate lockouts are both real:
 
-- Add **Repository admin** to the ruleset's bypass list so `@yuka1981` can
-  merge their own reviewed-by-inspection changes to these paths (weakens the
-  control specifically for the owner — acceptable since the owner is already
-  the trusted party the control protects against *other* accounts).
-- Or add a second trusted collaborator to the repo and to CODEOWNERS for
-  these paths, so real second-party review is possible.
+1. **"Required approvals: 1" applies repo-wide, to every PR, not just PRs
+   touching the four protected paths.** GitHub does not let an account
+   approve its own pull request. `@yuka1981` is the only account with write
+   access, so with the bypass list empty and no second reviewer,
+   `@yuka1981` cannot get even ONE approval on ANY PR — including a PR that
+   never touches `.github/workflows/`, `CODEOWNERS`, `deploy.sh`, or
+   `cn02.crontab`. This blocks the rollout PR itself from merging.
+2. **"Restrict creations" blocks the owner from creating branches too.**
+   GitHub rulesets do not implicitly exempt repository admins/owners from
+   ruleset rules. With the bypass list empty, `@yuka1981` cannot push a
+   brand-new branch into existence either, not just external contributors.
+
+**Recommended default (do this):** add `@yuka1981` (or the **Repository
+admin** role) to the ruleset's bypass list, for both "Require a pull
+request before merging" and "Restrict creations", before merging anything.
+This is what makes the ruleset operable at all for a solo maintainer. Be
+honest about the tradeoff this creates: on a solo repo, the CODEOWNERS
+review requirement becomes advisory for the owner — they bypass their own
+required review, so it is not a real second opinion on their own changes.
+Its actual value shifts to (a) blocking any *other* account that gains
+write access from merging changes to the protected paths without
+`@yuka1981`'s review, and (b) forcing every change to these paths through a
+visible, revertible PR diff instead of a silent direct push or true
+self-review with no paper trail.
+
+**Stricter alternative:** for a genuine two-person review gate, add a
+second trusted collaborator to the repo and to CODEOWNERS for the protected
+paths, and leave the bypass list empty. Then `@yuka1981` truly cannot merge
+changes to those paths (or create branches) without that person acting —
+at the cost of requiring a second human for every rollout-related change,
+including this one.
 
 Document whichever you pick as the accepted residual risk (spec §1 already
 accepts that a compromised/malicious writer can merge to `master`; this is
@@ -451,7 +514,12 @@ test -w /home/reidlin/stock/scripts/deploy.sh \
   && echo "FAIL: ghrunner can write deploy.sh" \
   || echo "OK: ghrunner cannot write deploy.sh"
 
-# 5. The one allowed command actually works:
+# 5. Cannot write the crontab that install_crontab feeds to `crontab` as reidlin:
+test -w /home/reidlin/stock/scripts/cn02.crontab \
+  && echo "FAIL: ghrunner can write cn02.crontab" \
+  || echo "OK: ghrunner cannot write cn02.crontab"
+
+# 6. The one allowed command actually works:
 sudo -H -u reidlin /home/reidlin/stock/scripts/deploy.sh; echo "exit=$?"
 # expect: exit=0 on a healthy master (this also performs a real deploy —
 # fine to run right after 7.1's merge, redundant otherwise)
@@ -459,4 +527,4 @@ sudo -H -u reidlin /home/reidlin/stock/scripts/deploy.sh; echo "exit=$?"
 exit
 ```
 
-If all five behave as expected, rollout is complete and verified.
+If all six behave as expected, rollout is complete and verified.
