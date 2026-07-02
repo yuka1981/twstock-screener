@@ -20,8 +20,8 @@ On every push to `master` (including PR merges), GitHub triggers
 executes exactly one command: `sudo -H -u reidlin
 /home/reidlin/stock/scripts/deploy.sh`. `deploy.sh` fast-forwards the checkout,
 syntax-checks itself, syncs dependencies, runs a smoke test, and reinstalls the
-managed crontab — all under a `flock` that serializes against the cron jobs. Any
-failure invokes a stdlib-only, DoH-pinned Telegram alerter (cn02 is
+managed crontab — all under a `flock` that serializes against the cron jobs. A failing
+step invokes a stdlib-only, DoH-pinned Telegram alerter (cn02 is
 outbound-only and reaches Telegram no other way); if it cannot send, it spools
 and exits non-zero rather than failing silently. The deploy workflow runs
 nothing but `deploy.sh` — the only other automated activity on cn02 is the
@@ -79,9 +79,10 @@ functions) + `trap notify_failure ERR`, then in `main()`:
 5. smoke: `TWSTOCK_DB_PATH=:memory: uv run pytest -m "not slow"`
 6. `install_crontab`: guarded by `test -s`, a sentinel `grep`, and a `crontab -l`
    backup before `crontab "$f"`.
-On any failure, the trap calls `notify_deploy.py` with the current step + short
-SHA. `main "$@"` is called at the end so a mid-file self-update can't run a
-half-parsed script.
+On any errexit failure, the trap calls `notify_deploy.py` with the current step
++ short SHA (a workflow `timeout-minutes` SIGKILL is the exception — it bypasses
+the trap entirely, see §6). `main "$@"` is called at the end so a mid-file
+self-update can't run a half-parsed script.
 
 ### notify_deploy.py (`scripts/notify_deploy.py`)
 - **stdlib only** — no `httpx`, no project imports, so it still runs even if
@@ -223,8 +224,10 @@ possible, guarded by a test.
 - Restored: removed the drill test, cleared the day's markers and the spool
   line, confirmed the tree clean.
 
-Conclusion: deploy failures are **not silent** — they alert; and if the alert
+Conclusion: a failing step is **not silent** — the trap alerts; and if the alert
 itself can't send, it spools and exits non-zero rather than pretending success.
+(The one gap is a `timeout-minutes` SIGKILL, which fires no trap — see §6; treat
+a red Actions run as the authoritative failure signal.)
 
 ---
 
