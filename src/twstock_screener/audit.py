@@ -18,17 +18,37 @@ here.
 """
 from __future__ import annotations
 
+import bisect
 import logging
 import sqlite3
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Literal
 
 from twstock_screener.analyze import _md_escape
 from twstock_screener.pivot import MAX_ADJACENT_RATIO_THRESHOLD
 
 logger = logging.getLogger(__name__)
+
+Kind = Literal["corp_action", "spike", "ambiguous"]
+
+# ≥ 這麼多個「市場有交易但本股缺席」的交易日 → 視為停牌型缺口(公司行動優先桶)。
+# 可調常數;調大 = 更保守(需更長停牌才判 corp_action)。
+K_HALT_SESSIONS: int = 2
+
+
+def classify(missed_sessions: int | None) -> Kind:
+    """由停牌交易日數導出分類。None = 計算不可得 → 誠實降級為 ambiguous
+    (不能用 0,0 代表真正的連續交易 spike)。"""
+    if missed_sessions is None:
+        return "ambiguous"
+    if missed_sessions >= K_HALT_SESSIONS:
+        return "corp_action"
+    if missed_sessions == 0:
+        return "spike"
+    return "ambiguous"
 
 
 @dataclass(frozen=True)
@@ -37,6 +57,12 @@ class Outlier:
     event_date: date  # date the discontinuity appeared (second of the two bars)
     ratio: float
     name: str = ""
+    prev_date: date | None = None       # 前一根(證據)
+    missed_sessions: int | None = None  # 停牌交易日數;None = 未算/失敗
+
+    @property
+    def kind(self) -> Kind:
+        return classify(self.missed_sessions)
 
 
 # Match longest detector lookback (60d for m_top/w_bottom).
@@ -46,6 +72,27 @@ class Outlier:
 DEFAULT_LOOKBACK_DAYS: int = 60
 
 
+def _missed_sessions(market_dates: list[str], prev_s: str, curr_s: str) -> int | None:
+    """開區間 (prev_s, curr_s) 內的市場交易日數,ISO 字串空間 bisect。
+    None = 計算失敗(降級為 ambiguous,絕不 crash 稽核)。
+
+    例外**只窄捕 TypeError**:唯一實際會炸的情境是 market_dates 與
+    prev/curr 不是同型(例如日後有人傳 date 物件混字串),bisect 比較不同
+    型別才拋 TypeError。此時隔離該筆(→ ambiguous)但用 logger.exception
+    **大聲記錄**,不讓真正的型別回歸靜默變 ambiguous(見 graceful-guard
+    盲點教訓)。其餘例外(邏輯 bug)照常往上拋,不吞。"""
+    try:
+        lo = bisect.bisect_right(market_dates, prev_s)
+        hi = bisect.bisect_left(market_dates, curr_s)
+        return max(0, hi - lo)
+    except TypeError:
+        logger.exception(
+            "missed_sessions type error for (prev=%r, curr=%r) — degrading to ambiguous",
+            prev_s, curr_s,
+        )
+        return None
+
+
 def scan_discontinuities(
     db_path: Path,
     today: date | None = None,
@@ -53,15 +100,44 @@ def scan_discontinuities(
     threshold: float = MAX_ADJACENT_RATIO_THRESHOLD,
 ) -> list[Outlier]:
     """Scan OHLC for adjacent-bar ratios > threshold within last
-    `lookback_days` calendar days of `today`. Returns one Outlier per
-    affected stock_id (the earliest in-window discontinuity)."""
+    `lookback_days` calendar days of `today`. Returns EVERY in-window
+    discontinuity per stock (per-stock reduction happens later in
+    run_audit, AFTER filtering the allow-list, so an allow-listed event
+    can't mask a later unknown one). Each Outlier carries prev_date and
+    missed_sessions (market trading days the stock was absent for)."""
     today = today or date.today()
     cutoff = (today - timedelta(days=lookback_days)).isoformat()
 
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
-        # Pull stocks that have at least 2 in-window bars.
+        # Market trading calendar for the window (single query, shared by
+        # all outliers). cutoff INVARIANT: same cutoff as the per-stock
+        # scan below — if the scan window ever widens to a pre-cutoff
+        # prev_date, this query MUST widen too or missed_sessions
+        # undercounts.
+        #
+        # ASSUMPTION (known limitation): the calendar is DERIVED from dates
+        # present in ohlc, not an authoritative trading-day source. A day
+        # counts as "market open" if ANY stock has a bar on it, so partial
+        # fetches are harmless — but a day where the ENTIRE market is missing
+        # from ohlc (full-market fetch outage) drops out of the calendar and
+        # undercounts missed_sessions. Degrade direction is SAFE
+        # (corp_action → ambiguous, still alerts a human; classify-only, no
+        # auto-purge). We deliberately do NOT use holidays.is_trading_day
+        # here: that table has been empty/fragile historically, and when
+        # empty it would count holiday weekdays (e.g. Lunar New Year) as
+        # missed sessions and mass-promote spikes → corp_action. The
+        # data-derived calendar gets holidays right for free (no bars on a
+        # market holiday → not in the calendar). A full-market missing day is
+        # rare and independently caught by the staleness/health guard.
+        market_dates = [
+            r["date"] for r in con.execute(
+                "SELECT DISTINCT date FROM ohlc WHERE date >= ? ORDER BY date",
+                (cutoff,),
+            )
+        ]
+
         stock_ids = [
             r["stock_id"] for r in con.execute(
                 "SELECT stock_id, COUNT(*) AS n FROM ohlc "
@@ -77,6 +153,8 @@ def scan_discontinuities(
                 "WHERE stock_id=? AND date >= ? ORDER BY date",
                 (sid, cutoff),
             ).fetchall()
+            stock_name = ""
+            name_loaded = False
             for i in range(1, len(rows)):
                 p = float(rows[i - 1]["close"])
                 c = float(rows[i]["close"])
@@ -84,16 +162,23 @@ def scan_discontinuities(
                     continue
                 ratio = max(c / p, p / c)
                 if ratio > threshold:
-                    name_row = con.execute(
-                        "SELECT name FROM stocks WHERE stock_id=?", (sid,)
-                    ).fetchone()
+                    prev_s = rows[i - 1]["date"]
+                    curr_s = rows[i]["date"]
+                    if not name_loaded:  # lazy: only when a discontinuity exists
+                        nr = con.execute(
+                            "SELECT name FROM stocks WHERE stock_id=?", (sid,)
+                        ).fetchone()
+                        stock_name = nr["name"] if nr else ""
+                        name_loaded = True
                     outliers.append(Outlier(
                         stock_id=sid,
-                        event_date=date.fromisoformat(rows[i]["date"]),
+                        event_date=date.fromisoformat(curr_s),
                         ratio=ratio,
-                        name=name_row["name"] if name_row else "",
+                        name=stock_name,
+                        prev_date=date.fromisoformat(prev_s),
+                        missed_sessions=_missed_sessions(market_dates, prev_s, curr_s),
                     ))
-                    break  # one outlier per stock — first in-window event
+                    # NO break — collect ALL in-window discontinuities.
     finally:
         con.close()
     return outliers
@@ -137,27 +222,79 @@ def filter_new(
     return [o for o in outliers if (o.stock_id, o.event_date) not in known]
 
 
+_KIND_PRIORITY: dict[Kind, int] = {"corp_action": 0, "ambiguous": 1, "spike": 2}
+
+_KIND_LABEL: dict[Kind, str] = {
+    "corp_action": "疑似公司行動",
+    "spike": "疑似市場暴衝",
+    "ambiguous": "待判",
+}
+
+_KIND_ADVICE: dict[Kind, str] = {
+    "corp_action": "🏭 疑似公司行動(停牌數日)→ 查證後 purge + 加入 allow-list",
+    "spike": "📈 疑似市場暴衝(連續交易)→ 多半合法,考慮 skip",
+    "ambiguous": "❓ 短缺口 → 人工判斷",
+}
+
+
+def _evidence(o: Outlier) -> str:
+    """Render evidence for an outlier at the unescaped layer.
+
+    - None missed_sessions → "缺口未知"
+    - corp_action → "停牌 {missed} 交易日 自 {prev_date}" (if prev_date exists)
+    - spike → "連續交易"
+    - ambiguous → "缺 {missed} 交易日 自 {prev_date}" (if prev_date exists)
+
+    prev_date is rendered unescaped (message layer's _md_escape will escape hyphens).
+    """
+    if o.missed_sessions is None:
+        return "缺口未知"
+    span = f" 自 {o.prev_date.isoformat()}" if o.prev_date is not None else ""
+    if o.kind == "corp_action":
+        return f"停牌 {o.missed_sessions} 交易日{span}"
+    if o.kind == "spike":
+        return "連續交易"
+    return f"缺 {o.missed_sessions} 交易日{span}"
+
+
+def select_per_stock(outliers: list[Outlier]) -> list[Outlier]:
+    """Reduce to one Outlier per stock: highest priority
+    (corp_action > ambiguous > spike), tie-break earliest event_date.
+    MUST run AFTER filter_new — otherwise an allow-listed event could be
+    selected then dropped, masking a later unknown one on the same stock."""
+    best: dict[str, Outlier] = {}
+    for o in outliers:
+        key = (_KIND_PRIORITY[o.kind], o.event_date)
+        cur = best.get(o.stock_id)
+        if cur is None or key < (_KIND_PRIORITY[cur.kind], cur.event_date):
+            best[o.stock_id] = o
+    return list(best.values())
+
+
 def format_audit_message(
     outliers: list[Outlier],
     today: date,
 ) -> str:
-    """Build MarkdownV2-escaped Telegram body. Uses 🔍 DATA AUDIT prefix
-    per cycle 29.2 design — distinguishes from regular daily digest."""
+    """Build MarkdownV2-escaped Telegram body. 🔍 DATA AUDIT prefix per
+    cycle 29.2. Each outlier carries its classification + evidence; the
+    footer gives per-kind advice. corp_action sorts first (most actionable)."""
+    ordered = sorted(outliers, key=lambda o: (_KIND_PRIORITY[o.kind], o.event_date))
     header = _md_escape(f"🔍 DATA AUDIT  {today.isoformat()}")
-    intro = _md_escape(f"新發現 {len(outliers)} 檔資料斷層 (max_adj > {MAX_ADJACENT_RATIO_THRESHOLD}×):")
+    intro = _md_escape(
+        f"新發現 {len(ordered)} 檔資料斷層 (max_adj > {MAX_ADJACENT_RATIO_THRESHOLD}×):"
+    )
     lines = [header, "", intro, ""]
-    for i, o in enumerate(outliers, 1):
+    for i, o in enumerate(ordered, 1):
         display_name = o.name or "(未知)"
-        line = _md_escape(
-            f"{i}. [{o.stock_id}] {display_name}  "
-            f"ratio={o.ratio:.2f}×  {o.event_date.isoformat()}"
-        )
-        lines.append(line)
+        lines.append(_md_escape(
+            f"{i}. [{o.stock_id}] {display_name}  ratio={o.ratio:.2f}×  "
+            f"{o.event_date.isoformat()}  〔{_KIND_LABEL[o.kind]}·{_evidence(o)}〕"
+        ))
     lines.append("")
-    lines.append(_md_escape(
-        "動作建議：確認是否為公司行動 (拆股 / 合併 / redemption / 大型分配)；"
-        "如是，purge pre-event bars + 加入 audit_known_outliers.toml."
-    ))
+    lines.append(_md_escape("動作建議:"))
+    for k in ("corp_action", "ambiguous", "spike"):
+        if any(o.kind == k for o in ordered):
+            lines.append(_md_escape(_KIND_ADVICE[k]))
     return "\n".join(lines)
 
 
@@ -166,21 +303,21 @@ def run_audit(
     config_path: Path,
     today: date,
 ) -> list[Outlier]:
-    """End-to-end audit pipeline: scan → filter against allow-list →
-    return new outliers. Caller decides whether to send Telegram alert.
-
-    Logs the count + per-stock summary at INFO so cron logs show the
-    audit ran even when there are zero new outliers."""
-    outliers = scan_discontinuities(db_path, today=today)
+    """End-to-end audit: scan all candidates → filter allow-list →
+    reduce to one actionable outlier per stock. Caller decides whether to
+    send a Telegram alert."""
+    candidates = scan_discontinuities(db_path, today=today)
     known = load_known_outliers(config_path)
-    new = filter_new(outliers, known)
+    unknown = filter_new(candidates, known)      # drop known FIRST
+    new = select_per_stock(unknown)              # then one-per-stock by priority
     logger.info(
-        "audit: scanned %d in-window discontinuities, %d known allow-listed, "
-        "%d new", len(outliers), len(outliers) - len(new), len(new),
+        "audit: %d candidate discontinuities, %d known-filtered, %d new",
+        len(candidates), len(candidates) - len(unknown), len(new),
     )
     for o in new:
         logger.info(
-            "  NEW outlier: %s %s on %s ratio=%.2f×",
+            "  NEW outlier: %s %s on %s ratio=%.2f× kind=%s missed=%s",
             o.stock_id, o.name, o.event_date.isoformat(), o.ratio,
+            o.kind, o.missed_sessions,
         )
     return new

@@ -14,13 +14,18 @@ from pathlib import Path
 import pytest
 
 from twstock_screener.audit import (
+    K_HALT_SESSIONS,
     Outlier,
+    _evidence,
+    _missed_sessions,
+    classify,
     filter_new,
     format_audit_message,
     load_known_outliers,
+    run_audit,
     scan_discontinuities,
+    select_per_stock,
 )
-
 
 # --- Fixtures --------------------------------------------------------------
 
@@ -61,6 +66,31 @@ def _continuous_bars(start_close: float, n: int, start_date: str) -> list[tuple[
         ((d0 + timedelta(days=i)).date().isoformat(), start_close + i * 0.01)
         for i in range(n)
     ]
+
+
+# --- classify & Outlier kind -----------------------------------------------
+
+
+def test_classify_boundaries():
+    assert classify(None) == "ambiguous"   # 計算失敗降級
+    assert classify(0) == "spike"
+    assert classify(1) == "ambiguous"      # 1 <= n < K_HALT
+    assert classify(2) == "corp_action"    # K_HALT 邊界
+    assert classify(6) == "corp_action"
+    assert K_HALT_SESSIONS == 2
+
+
+def test_outlier_positional_construction_defaults_to_ambiguous():
+    """既有 test 用位置參數建構 Outlier;新欄位不得破壞,且無停牌證據時
+    kind 必為 ambiguous(不得誤標 spike)。"""
+    o = Outlier("X", date(2026, 1, 1), 20.0)
+    assert o.missed_sessions is None
+    assert o.kind == "ambiguous"
+
+
+def test_outlier_kind_derives_from_missed_sessions():
+    assert Outlier("A", date(2026, 1, 1), 3.0, missed_sessions=0).kind == "spike"
+    assert Outlier("A", date(2026, 1, 1), 3.0, missed_sessions=4).kind == "corp_action"
 
 
 # --- scan_discontinuities --------------------------------------------------
@@ -118,6 +148,51 @@ def test_scan_uses_threshold_constant(ohlc_db: Path):
     _insert_ohlc(ohlc_db, "TEST4", bars)
     outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 21), lookback_days=60)
     assert outliers == []
+
+
+def test_missed_sessions_open_interval_and_failure_isolation():
+    """開區間計數(prev/curr 本身也是 fixture 內出現的市場日期,含週末)+
+    型別不符時隔離為 None(不拋),配合 classify(None)→ambiguous 完成降級鏈。"""
+    md = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
+    assert _missed_sessions(md, "2026-01-05", "2026-01-06") == 0  # 相鄰,無中間
+    assert _missed_sessions(md, "2026-01-05", "2026-01-07") == 1  # 01-06
+    assert _missed_sessions(md, "2026-01-05", "2026-01-08") == 2  # 01-06/07
+    # 失敗隔離:date 物件混字串 → bisect 拋 TypeError → 捕捉並回 None(不拋)
+    assert _missed_sessions(md, date(2026, 1, 5), "2026-01-08") is None
+    assert classify(None) == "ambiguous"  # 降級鏈:None → ambiguous
+
+
+def test_scan_classifies_spike_as_missed_zero(ohlc_db: Path):
+    """相鄰交易日的 5× 跳空(無停牌)→ missed=0 → spike。"""
+    bars = _continuous_bars(100.0, 30, "2026-03-22")
+    bars += [("2026-04-21", 500.0)]
+    bars += _continuous_bars(500.0, 29, "2026-04-22")
+    _insert_ohlc(ohlc_db, "TEST1", bars)
+
+    outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 21), lookback_days=60)
+    assert len(outliers) == 1
+    assert outliers[0].missed_sessions == 0
+    assert outliers[0].kind == "spike"
+
+
+def test_scan_classifies_halt_gap_as_corp_action(ohlc_db: Path):
+    """本股停牌 3 個交易日(同期市場 MKT 有交易)+ 3.26× 恢復 → corp_action。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 60, "2026-03-23"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-04-14", 6.60),
+        ("2026-04-15", 6.60),
+        # 停牌:2026-04-16 / 17 / 18(MKT 這幾天有交易)
+        ("2026-04-19", 21.50),
+        ("2026-04-20", 21.00),
+    ])
+
+    outliers = scan_discontinuities(ohlc_db, today=date(2026, 5, 10), lookback_days=60)
+    sus = [o for o in outliers if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].missed_sessions == 3      # MKT 交易於 04-16/17/18
+    assert sus[0].kind == "corp_action"
+    assert sus[0].event_date == date(2026, 4, 19)
+    assert sus[0].prev_date == date(2026, 4, 15)
 
 
 # --- load_known_outliers ---------------------------------------------------
@@ -212,3 +287,95 @@ def test_format_audit_message_escapes_markdown_v2():
         assert sp not in stripped, (
             f"unescaped {sp!r} would break Telegram MarkdownV2"
         )
+
+
+def test_evidence_renders_prev_date_at_unescaped_layer():
+    """_evidence 在未 escape 層產出證據字串;corp_action/ambiguous 須含 prev_date
+    (訊息層 _md_escape 會把日期的 '-' 轉義,故在此層直接驗較穩健)。"""
+    corp = Outlier("AAA", date(2026, 4, 22), 5.0,
+                   prev_date=date(2026, 4, 14), missed_sessions=4)
+    assert _evidence(corp) == "停牌 4 交易日 自 2026-04-14"
+    spike = Outlier("BBB", date(2026, 5, 10), 2.5,
+                    prev_date=date(2026, 5, 9), missed_sessions=0)
+    assert _evidence(spike) == "連續交易"
+    unknown = Outlier("CCC", date(2026, 5, 10), 2.5)  # missed None
+    assert _evidence(unknown) == "缺口未知"
+
+
+def test_format_audit_message_shows_kind_labels_and_advice():
+    outliers = [
+        Outlier("BBB", date(2026, 5, 10), 2.5, name="乙",
+                prev_date=date(2026, 5, 9), missed_sessions=0),    # spike
+        Outlier("CCC", date(2026, 5, 11), 2.0, name="丙",
+                prev_date=date(2026, 5, 10), missed_sessions=1),   # ambiguous
+        Outlier("AAA", date(2026, 4, 22), 5.0, name="甲",
+                prev_date=date(2026, 4, 14), missed_sessions=4),   # corp_action
+    ]
+    msg = format_audit_message(outliers, today=date(2026, 5, 22))
+    assert "疑似公司行動" in msg
+    assert "疑似市場暴衝" in msg
+    assert "待判" in msg                     # ambiguous 標籤
+    assert "停牌 4 交易日" in msg
+    assert "人工判斷" in msg                  # ambiguous footer 分支被觸及
+    # 排序:corp_action(AAA)< ambiguous(CCC)< spike(BBB)
+    assert msg.index("AAA") < msg.index("CCC") < msg.index("BBB")
+
+
+# --- select_per_stock and run_audit order -----------------------------------
+
+
+def test_run_audit_corp_action_not_masked_by_earlier_spike(ohlc_db: Path, tmp_path: Path):
+    """同股『早 spike + 晚 corp_action』→ 報 corp_action(不被早 spike 遮蔽)。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 60, "2026-03-23"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-03-24", 10.0),
+        ("2026-03-25", 50.0),   # 5× spike(相鄰日)→ missed 0
+        ("2026-03-26", 50.0),
+        # 停牌 03-27/28/29/30(MKT 有交易)
+        ("2026-03-31", 163.0),  # ~3.26× → corp_action
+        ("2026-04-01", 163.0),
+    ])
+    cfg = tmp_path / "empty.toml"
+    cfg.write_text("")
+
+    new = run_audit(ohlc_db, cfg, today=date(2026, 5, 10))
+    sus = [o for o in new if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].kind == "corp_action"
+    assert sus[0].event_date == date(2026, 3, 31)
+
+
+def test_run_audit_later_unknown_corp_action_not_masked_by_known(ohlc_db: Path, tmp_path: Path):
+    """同股『早 corp_action 已在 allow-list + 晚未知 corp_action』→ 報晚的未知者。
+    若選擇發生在 filter_new 之前(bug),早者會被選中再被 filter 丟掉 → 晚者被遮蔽。"""
+    _insert_ohlc(ohlc_db, "MKT", _continuous_bars(50.0, 70, "2026-03-10"))
+    _insert_ohlc(ohlc_db, "SUS", [
+        ("2026-03-16", 6.0),
+        # 停牌 03-17/18/19
+        ("2026-03-20", 20.0),   # corp_action #1,event 03-20(將被 allow-list)
+        ("2026-03-23", 20.0),
+        # 停牌 03-24/25/26
+        ("2026-03-27", 66.0),   # corp_action #2,event 03-27(未知)
+    ])
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(
+        '[[outliers]]\n'
+        'stock_id = "SUS"\n'
+        'status = "purged"\n'
+        'action_date = "2026-03-20"\n'
+    )
+
+    new = run_audit(ohlc_db, cfg, today=date(2026, 5, 10))
+    sus = [o for o in new if o.stock_id == "SUS"]
+    assert len(sus) == 1
+    assert sus[0].event_date == date(2026, 3, 27)  # 晚的未知者
+    assert sus[0].kind == "corp_action"
+
+
+def test_select_per_stock_prefers_corp_action_then_earliest():
+    spike = Outlier("A", date(2026, 1, 5), 5.0, missed_sessions=0)
+    corp_early = Outlier("A", date(2026, 1, 10), 3.0, missed_sessions=4)
+    corp_late = Outlier("A", date(2026, 1, 20), 3.0, missed_sessions=4)
+    picked = select_per_stock([spike, corp_late, corp_early])
+    assert len(picked) == 1
+    assert picked[0].event_date == date(2026, 1, 10)  # corp_action 且最早
