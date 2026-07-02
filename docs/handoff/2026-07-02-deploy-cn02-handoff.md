@@ -246,7 +246,11 @@ ssh reidlin@s5xq-cn02 'sudo systemctl status actions.runner.yuka1981-twstock-scr
 ```
 
 ### When a deploy fails
-- You get a Telegram alert naming the failing step.
+- Normally you get a Telegram alert naming the failing step — but it is not
+  guaranteed: if the notifier can't send it spools to
+  `~reidlin/.deploy-notify/spool.log` and exits non-zero, and a
+  `timeout-minutes` SIGKILL fires no trap at all. Treat a red Actions run (not
+  the presence/absence of a Telegram) as the authoritative failure signal.
 - Read the run log: `gh run view <id> --log-failed`.
 - The box is left on the previous good checkout only if `git pull` failed; if a
   later step failed, the pull already advanced the tree — re-run after fixing.
@@ -303,4 +307,5 @@ repos/yuka1981/twstock-screener/actions/runners/{registration-token,remove-token
 
 On cn02: runner at `/home/ghrunner/actions-runner`, sudoers at
 `/etc/sudoers.d/ghrunner-deploy`, notify state at `~reidlin/.deploy-notify/`,
-crontab backups at `~reidlin/crontab-backups/`.
+per-deploy crontab backups at `~reidlin/.crontab.bak.<ts>`, and the one-off
+manual pre-rollout snapshot at `~reidlin/crontab-backups/`.
