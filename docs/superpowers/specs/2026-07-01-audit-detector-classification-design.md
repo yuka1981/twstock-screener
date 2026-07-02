@@ -193,3 +193,21 @@ class Outlier:
 - 暫不做 sparse-market-day 檢查(預載 `date → COUNT(DISTINCT stock_id)` 以偵測
   可疑稀疏的「市場交易日」)。classify-only + 人工查證已能兜住這類偽陽;若日後
   出現稀疏日誤判再加(Codex non-blocking,YAGNI)。
+
+## 已知限制:市場行事曆由 ohlc 推導(非權威來源)
+
+(對抗式審查 2026-07-01 提出)`market_dates` 由 ohlc 存在的日期推導,不是權威交易
+日曆。這是刻意取捨:
+
+- **偽陰(undercount)**:某真交易日若**全市場**都缺料(整日 fetch 中斷),會從
+  日曆消失使 `missed_sessions` 低估。但(a)只要**任一檔**有 bar 該日就保留(部分
+  缺料無害);(b)全市場整日缺料罕見,且會先被既有 staleness/health guard 抓到;
+  (c)降級方向**安全**(`corp_action → ambiguous`,仍發告警要人判斷)。
+- **偽陽(overcount)**:需 ohlc 有假日/週末的雜訊列;loader 只抓 TWSE 交易日,
+  無此來源。
+- **為何不改用 `holidays.is_trading_day`**:該表歷史上為空/脆弱(自始為空,
+  2026-06-22 才修),表空時會把假日平日(如農曆年)算成停牌,系統性把 spike 誤升
+  為 corp_action ——比現況更糟。data-derived 做法反而**天生把假日算對**(假日全市場
+  不交易 → 不在日曆)。
+- 上述 + classify-only + 人工查證 → 誤判不會驅動不可逆動作,故列為已知限制而非阻斷。
+  若日後真的踩到全缺日,再加上面那個 sparse-market-day 完整性檢查即可。

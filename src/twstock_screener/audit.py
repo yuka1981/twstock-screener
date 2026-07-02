@@ -116,6 +116,21 @@ def scan_discontinuities(
         # scan below — if the scan window ever widens to a pre-cutoff
         # prev_date, this query MUST widen too or missed_sessions
         # undercounts.
+        #
+        # ASSUMPTION (known limitation): the calendar is DERIVED from dates
+        # present in ohlc, not an authoritative trading-day source. A day
+        # counts as "market open" if ANY stock has a bar on it, so partial
+        # fetches are harmless — but a day where the ENTIRE market is missing
+        # from ohlc (full-market fetch outage) drops out of the calendar and
+        # undercounts missed_sessions. Degrade direction is SAFE
+        # (corp_action → ambiguous, still alerts a human; classify-only, no
+        # auto-purge). We deliberately do NOT use holidays.is_trading_day
+        # here: that table has been empty/fragile historically, and when
+        # empty it would count holiday weekdays (e.g. Lunar New Year) as
+        # missed sessions and mass-promote spikes → corp_action. The
+        # data-derived calendar gets holidays right for free (no bars on a
+        # market holiday → not in the calendar). A full-market missing day is
+        # rare and independently caught by the staleness/health guard.
         market_dates = [
             r["date"] for r in con.execute(
                 "SELECT DISTINCT date FROM ohlc WHERE date >= ? ORDER BY date",
