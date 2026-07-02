@@ -42,8 +42,9 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return env
 
 
-def doh_resolve(host: str, timeout: float = 5.0) -> str | None:
-    """One A record via Cloudflare DoH-over-IP; None on any failure."""
+def doh_resolve(host: str, timeout: float = 5.0) -> tuple[str | None, str]:
+    """One A record via Cloudflare DoH-over-IP; returns (ip, reason).
+    ip is None on any failure; reason is empty string on success or error description."""
     q = urllib.parse.urlencode({"name": host, "type": "A"})
     req = urllib.request.Request(
         f"{DOH_URL}?{q}", headers={"accept": "application/dns-json"}
@@ -53,10 +54,10 @@ def doh_resolve(host: str, timeout: float = 5.0) -> str | None:
             data = json.loads(resp.read().decode("utf-8"))
         for ans in data.get("Answer", []):
             if ans.get("type") == 1 and ans.get("data"):
-                return str(ans["data"])
-    except Exception:
-        return None
-    return None
+                return str(ans["data"]), ""
+    except Exception as exc:
+        return None, str(exc)
+    return None, "no A records found"
 
 
 @contextlib.contextmanager
@@ -75,19 +76,22 @@ def pinned_dns(host: str, ip: str):
         socket.getaddrinfo = orig  # type: ignore[assignment]
 
 
-def post_telegram(token: str, chat_id: str, message: str, timeout: float = 15.0) -> bool:
-    """POST plain text (no parse_mode). DoH-pinned when possible."""
+def post_telegram(token: str, chat_id: str, message: str, timeout: float = 15.0) -> tuple[bool, str]:
+    """POST plain text (no parse_mode). DoH-pinned when possible.
+    Returns (success, reason). reason is empty string on success or error description."""
     url = f"https://{TELEGRAM_HOST}/bot{token}/sendMessage"
     data = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode()
-    ip = doh_resolve(TELEGRAM_HOST)
+    ip, doh_reason = doh_resolve(TELEGRAM_HOST)
     ctx = pinned_dns(TELEGRAM_HOST, ip) if ip else contextlib.nullcontext()
     try:
         with ctx:
             req = urllib.request.Request(url, data=data, method="POST")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status == 200
-    except Exception:
-        return False
+                if resp.status == 200:
+                    return True, ""
+                return False, f"HTTP {resp.status}"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def spool_failure(message: str) -> None:
@@ -109,18 +113,33 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # dedup: this (date, sha) already alerted
 
     env = parse_env_file(Path(args.env_file))
-    token = env.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat = env.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", "")
+    # Read TWSTOCK_-prefixed names first (project's real config), fallback to bare names
+    token = (
+        env.get("TWSTOCK_TELEGRAM_BOT_TOKEN")
+        or env.get("TELEGRAM_BOT_TOKEN")
+        or os.environ.get("TWSTOCK_TELEGRAM_BOT_TOKEN")
+        or os.environ.get("TELEGRAM_BOT_TOKEN")
+        or ""
+    )
+    chat = (
+        env.get("TWSTOCK_TELEGRAM_CHAT_ID")
+        or env.get("TELEGRAM_CHAT_ID")
+        or os.environ.get("TWSTOCK_TELEGRAM_CHAT_ID")
+        or os.environ.get("TELEGRAM_CHAT_ID")
+        or ""
+    )
     if not token or not chat:
         sys.stderr.write("DEPLOY-NOTIFY: missing TELEGRAM_BOT_TOKEN/CHAT_ID\n")
         spool_failure(f"[no-config] {args.message}")
         return 1
 
-    if post_telegram(token, chat, args.message):
+    ok, reason = post_telegram(token, chat, args.message)
+    if ok:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("", encoding="utf-8")
         return 0
-    sys.stderr.write(f"DEPLOY-NOTIFY: telegram send FAILED — {args.message}\n")
+    reason_str = f" ({reason})" if reason else ""
+    sys.stderr.write(f"DEPLOY-NOTIFY: telegram send FAILED{reason_str} — {args.message}\n")
     spool_failure(args.message)
     return 1
 

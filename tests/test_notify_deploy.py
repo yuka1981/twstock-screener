@@ -26,8 +26,8 @@ def nd(tmp_path, monkeypatch):
 def _envfile(tmp_path, token="123:abc", chat="42"):
     p = tmp_path / ".env"
     p.write_text(
-        f'TELEGRAM_BOT_TOKEN="{token}"\n'
-        f"TELEGRAM_CHAT_ID={chat}\n"
+        f'TWSTOCK_TELEGRAM_BOT_TOKEN="{token}"\n'
+        f"TWSTOCK_TELEGRAM_CHAT_ID={chat}\n"
         "# comment\n\nOTHER=ignored\n",
         encoding="utf-8",
     )
@@ -36,14 +36,25 @@ def _envfile(tmp_path, token="123:abc", chat="42"):
 
 def test_parse_env_file_strips_quotes_and_comments(nd, tmp_path):
     env = nd.parse_env_file(_envfile(tmp_path))
-    assert env["TELEGRAM_BOT_TOKEN"] == "123:abc"
-    assert env["TELEGRAM_CHAT_ID"] == "42"
+    assert env["TWSTOCK_TELEGRAM_BOT_TOKEN"] == "123:abc"
+    assert env["TWSTOCK_TELEGRAM_CHAT_ID"] == "42"
     assert "OTHER" in env and "#" not in "".join(env.keys())
+
+
+def test_reads_twstock_prefixed_env_keys(nd, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(nd, "post_telegram", lambda t, c, m: calls.append((t, c, m)) or (True, ""))
+    rc = nd.main([
+        "--env-file", str(_envfile(tmp_path)), "--sha", "xyz789",
+        "--message", "test", "--today", "2026-07-02",
+    ])
+    assert rc == 0
+    assert calls == [("123:abc", "42", "test")]
 
 
 def test_send_success_marks_and_returns_zero(nd, tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(nd, "post_telegram", lambda t, c, m: calls.append((t, c, m)) or True)
+    monkeypatch.setattr(nd, "post_telegram", lambda t, c, m: calls.append((t, c, m)) or (True, ""))
     rc = nd.main([
         "--env-file", str(_envfile(tmp_path)), "--sha", "abc123",
         "--message", "boom", "--today", "2026-07-02",
@@ -65,7 +76,7 @@ def test_dedup_same_date_sha_skips_send(nd, tmp_path, monkeypatch):
 
 
 def test_send_failure_spools_and_no_marker(nd, tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(nd, "post_telegram", lambda *a: False)
+    monkeypatch.setattr(nd, "post_telegram", lambda *a: (False, "network error"))
     rc = nd.main([
         "--env-file", str(_envfile(tmp_path)), "--sha", "def456",
         "--message", "boom", "--today", "2026-07-02",
@@ -73,7 +84,8 @@ def test_send_failure_spools_and_no_marker(nd, tmp_path, monkeypatch, capsys):
     assert rc == 1
     assert not (nd.NOTIFY_DIR / "2026-07-02-def456").exists()  # retry can alert
     assert "boom" in nd.SPOOL.read_text(encoding="utf-8")
-    assert "FAILED" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "FAILED" in err and "network error" in err
 
 
 def test_missing_config_returns_one(nd, tmp_path, monkeypatch):
@@ -99,9 +111,9 @@ def test_post_telegram_builds_request_without_network(nd, monkeypatch):
         seen["data"] = req.data
         return _Resp()
 
-    monkeypatch.setattr(nd, "doh_resolve", lambda host, timeout=5.0: None)  # skip DoH
+    monkeypatch.setattr(nd, "doh_resolve", lambda host, timeout=5.0: (None, ""))  # skip DoH
     monkeypatch.setattr(nd.urllib.request, "urlopen", fake_urlopen)
-    ok = nd.post_telegram("123:abc", "42", "hello world")
-    assert ok is True
+    ok, reason = nd.post_telegram("123:abc", "42", "hello world")
+    assert ok is True and reason == ""
     assert "/bot123:abc/sendMessage" in seen["url"]
     assert b"chat_id=42" in seen["data"] and b"hello" in seen["data"]
