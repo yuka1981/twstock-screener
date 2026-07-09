@@ -40,8 +40,9 @@
 def test_build_message_shows_similarity_and_composite_pct():
     """每個排行列顯示 相似(fit_score) 與 綜合(composite) 的整數百分比。
 
-    三段用互不相同的 fixture 值,可抓到「改了一處、漏改另一處」的分支錯誤;
-    值避開 .5 邊界,故 :.0f 期望值無歧義。型態消失列不得帶這兩個欄位。
+    三段用互不相同的 fixture 值,且**每段正向斷言限縮在該段標題範圍內**,
+    可抓到「值對但跑錯段」與「改了一處、漏改另一處」;值避開 .5 邊界,
+    故 :.0f 期望值無歧義。型態消失列不得帶這兩個欄位。
     """
     from twstock_screener.analyze import Departure
 
@@ -61,15 +62,21 @@ def test_build_message_shows_similarity_and_composite_pct():
         departures=[Departure("9999", "消失名", "m_top")],
     )
 
-    # 三段各自出現對應百分比(數字互不相同 → 分支沒寫錯/漏改)
-    assert "相似 87% 綜合 61%" in msg
-    assert "相似 73% 綜合 44%" in msg
-    assert "相似 42% 綜合 30%" in msg
+    # 用 escaped 區段標題切出四段(訊息順序:賣 → 買 → 箱 → 型態消失,末段最後)
+    sell_idx = msg.index(_md_escape("🔴 賣型態出現 (前 10)"))
+    buy_idx = msg.index(_md_escape("🟢 買型態出現 (前 10)"))
+    box_idx = msg.index(_md_escape("⚪ 箱型出現 (前 5)"))
+    dep_idx = msg.index(_md_escape("⚠️ 型態消失 (前 5)"))
+
+    # 每段的百分比只在「該段內」出現(值對且跑對段)
+    assert "相似 87% 綜合 61%" in msg[sell_idx:buy_idx]
+    assert "相似 73% 綜合 44%" in msg[buy_idx:box_idx]
+    assert "相似 42% 綜合 30%" in msg[box_idx:dep_idx]
 
     # 負向斷言只限縮到型態消失段:整則訊息本來就有 相似/綜合(候選列),
-    # 故不可寫 `"相似" not in msg`(會恆為 False)。型態消失段在最後,
-    # slice 到結尾只含該段。
-    dep_section = msg[msg.index("型態消失"):]
+    # 故不可寫 `"相似" not in msg`(會恆為 False)。用完整 escaped 標題定位,
+    # 對股名巧合更穩健。
+    dep_section = msg[dep_idx:]
     assert "相似" not in dep_section
     assert "綜合" not in dep_section
 ```
@@ -143,7 +150,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - 「不動排序/detector/型態消失」→ Global Constraints + Step3 明示不動。✓
 - 「值域 0..1、`0%` 合法」→ `:.0f` 自然處理;箱型 fixture composite=0.30 及一般值已覆蓋顯示邏輯(0% 為同一格式路徑,無分支)。✓
 - 「內嵌 `_md_escape` 安全」→ Step4 明確驗證既有 escape 測試仍 PASS。✓
-- 「測試三分支 + 型態消失負向斷言限縮 + fixture 避開 .5」→ Task1 Step1 全數落實。✓
+- 「測試三分支 + 正向斷言按段限縮 + 型態消失負向斷言限縮 + fixture 避開 .5」→ Task1 Step1 全數落實。✓
 
 **2. Placeholder scan** — 無 TBD/TODO;每步含實際程式碼與可跑指令。✓
 
