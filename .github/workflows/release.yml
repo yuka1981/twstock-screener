@@ -1,0 +1,32 @@
+name: release
+on:
+  push: { branches: [master] }          # 僅 master；無 workflow_dispatch
+concurrency: { group: release, queue: max }   # FIFO 排隊、不丟棄 pending run
+permissions: { contents: write }
+jobs:
+  release:
+    runs-on: ubuntu-latest                      # 刻意用 hosted，write token 不碰 cn02
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0, fetch-tags: true }
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/release_tag.sh
+
+          # 先自我把關：邏輯回歸就在動到 release 之前紅燈
+          bash scripts/tests/test_release_tag.sh
+
+          today="$(TZ=Asia/Taipei date +%Y.%m.%d)"
+          existing="$(git tag --list 'v*')"          # 簡單賦值：git 失敗 → set -e 中止
+          TAG="$(printf '%s\n' "$existing" | compute_tag "$today")"
+
+          # capture-first fail-closed：gh 失敗發生在簡單賦值上 → set -e 中止整個 run。
+          released="$(gh release list --limit 100 --json tagName,isDraft \
+                        --jq '.[] | select(.isDraft==false) | .tagName')"
+          NOTES_START="$(printf '%s\n' "$released" | select_prev)"
+
+          args=(--target "$GITHUB_SHA" --title "$TAG" --generate-notes --fail-on-no-commits)
+          [ -n "$NOTES_START" ] && args+=(--notes-start-tag "$NOTES_START")
+          gh release create "$TAG" "${args[@]}"
