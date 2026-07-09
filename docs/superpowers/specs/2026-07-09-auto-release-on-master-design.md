@@ -114,6 +114,7 @@ select_prev() {
 1. **Queue 順序 ≠ commit 順序**：`queue: max` 是「進入等待的先後」FIFO，非 commit 祖先序。理論上若後代 commit 的 run 先跑，同日尾碼序數會對調、notes 範圍略重疊。順序人工合併下 reorder 視窗為亞秒級、實務不可達，且後果純 cosmetic（無資料遺失、無指錯 commit）。升級路徑：以 `$GITHUB_SHA` 的 commit 祖先關係挑 `prev`。
 2. **Orphan tag**：`gh release create` 是單一原子 API call，「tag 建好但 release 沒建」近乎不發生；真發生時該 commit 本來就沒 release，補一個 `-N` release 是它唯一正確的 release，另留一個無害 orphan tag。升級路徑：偵測「tag 存在但無對應 release」時對既有 tag 補建 release。
 3. **`queue: max` 上限 100 pending**：超過會取消。此 repo 流量不可能觸及。
+4. **暫時失敗 ＋ 在後續 release 之後重跑 → 該 commit 可能變不可發布**：若某 commit A 的 release run 暫時性失敗（gh／網路抽風），且在重跑前已有更晚的 commit B 先 ship 成 release，則重跑 A 時 `select_prev` 會挑到 B（A 的後代）當 notes base，`--fail-on-no-commits` 因「距上個 release（B）無新 commit」而**拒絕** → A 拿不到自己的 release。此案**非無聲**（重跑會紅燈、維護者看得到）、**低機率**（需「暫時失敗＋B 先 ship＋手動重跑」複合事件，單人順序合併下罕見）、**低影響**（A 的變更仍在 master、仍由獨立的 `deploy.yml` 部署，且 A 的 commit 會落進下一個 release 的 notes 範圍；丟的只是 A 專屬的 release 物件）。手動補救：對 A 手動 `gh release create`，或接受它併入下一個 release 的 notes。升級路徑（擇一）：(a) 動 tag 前查「`$GITHUB_SHA` 是否已有 release」做 per-SHA 冪等短路，並**拿掉 `--fail-on-no-commits`**——重跑失敗的 A 會補出 release（日期為重跑日）、成功重跑變 no-op、不需 ancestry，代價是 A 的日期偏移＋可能 notes 重疊（cosmetic）；(b) 改用 ancestry-aware `select_prev`（以 `$GITHUB_SHA` 的祖先關係挑最近的已發布 tag），最穩健但最複雜。此限制由 2026-07-09 對抗式 review（Codex）指出，經評估對本 repo 風險比後刻意延後。
 
 ## 驗證計畫
 
