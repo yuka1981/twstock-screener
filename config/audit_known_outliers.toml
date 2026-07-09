@@ -30,6 +30,18 @@
 #   4. Include a note explaining the decision basis.
 
 [[outliers]]
+stock_id = "2380"
+status = "purged"
+action_date = "2026-06-29"
+note = "72.34% capital reduction to offset losses (每仟股換發 276.58 股); halted 2026-06-17~06-26, resumed 2026-06-29 close 21.5 = 3.26x from pre-halt 6.6. Pre-2026-06-29 bars purged on 2026-07-09 (backup data/purged-2380-2026-07-09.bak.txt). Verified via 證交所公告/投保中心."
+
+[[outliers]]
+stock_id = "00685L"
+status = "purged"
+action_date = "2026-07-07"
+note = "1:24 forward unit split (群益臺灣加權正2); halted 2026-07-01~07-06, resumed 2026-07-07 close 12.23 = 25.02x down from pre-halt 306.0. Pre-2026-07-07 bars purged on 2026-07-09 (backup data/purged-00685L-2026-07-09.bak.txt). Verified via 群益投信官網/鉅亨/工商/聯合."
+
+[[outliers]]
 stock_id = "00631L"
 status = "purged"
 action_date = "2026-03-31"
