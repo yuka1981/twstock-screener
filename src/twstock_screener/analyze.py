@@ -373,6 +373,7 @@ def _build_message(
             lines.append(_md_escape(
                 f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
                 f"  ${c.close:.2f}"
+                f"  相似 {c.fit_score*100:.0f}% 綜合 {c.composite*100:.0f}%"
             ))
             lines.append(
                 f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
@@ -386,6 +387,7 @@ def _build_message(
             lines.append(_md_escape(
                 f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
                 f"  ${c.close:.2f}"
+                f"  相似 {c.fit_score*100:.0f}% 綜合 {c.composite*100:.0f}%"
             ))
             lines.append(
                 f"   📈 https://www\\.tradingview\\.com/symbols/TWSE\\-{c.stock_id}/"
@@ -399,6 +401,7 @@ def _build_message(
             lines.append(_md_escape(
                 f"{i}. [{c.stock_id}] {c.name}  {PATTERN_NAME[c.pattern]}"
                 f"  ${c.close:.2f}"
+                f"  相似 {c.fit_score*100:.0f}% 綜合 {c.composite*100:.0f}%"
             ))
     else:
         lines.append(_md_escape("(無)"))
