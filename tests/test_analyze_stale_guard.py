@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from unittest.mock import MagicMock
 
+import pytest
+
 from twstock_screener import analyze
 from twstock_screener.config import Settings
 from twstock_screener.db import get_connection, init_db
@@ -70,3 +72,71 @@ def test_genuinely_stale_data_still_aborts(tmp_path, monkeypatch):
     rc = analyze.run_analysis(settings, today=date(2026, 6, 22), dry_run=False)
 
     assert rc == 2, "weeks-old data must still abort as stale"
+
+
+# --- per-stock coverage guard (plan 2026-10-07) -----------------------------
+# Regression for 2026-09-30..10-06: fetch froze most stocks while a few stayed
+# fresh, so global MAX(date) passed the stale check with 214/1297 covered.
+
+EXPECTED = date(2026, 10, 6)  # Tue; today below is Wed 10-07
+
+
+def _seed_universe(db, total: int, covered: int, extra_sql: list[str] = ()):
+    init_db(db)
+    con = get_connection(db)
+    for i in range(total):
+        sid = f"{1000 + i}"
+        con.execute(
+            "INSERT INTO stocks (stock_id, name, market, delisted) "
+            "VALUES (?, ?, 'TWSE', 0)", (sid, sid),
+        )
+        last = EXPECTED if i < covered else EXPECTED - timedelta(days=7)
+        for k in range(30):
+            con.execute(
+                "INSERT INTO ohlc "
+                "(stock_id, date, open, high, low, close, volume, turnover) "
+                "VALUES (?, ?, 100, 110, 95, 105, 5000000, NULL)",
+                (sid, (last - timedelta(days=29 - k)).isoformat()),
+            )
+    for sql in extra_sql:
+        con.execute(sql)
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize(("covered", "aborts"), [(94, True), (95, False), (96, False)])
+def test_coverage_boundary(tmp_path, monkeypatch, covered, aborts):
+    db = tmp_path / "twstock.db"
+    _seed_universe(db, total=100, covered=covered)
+    _patch(monkeypatch)
+    settings = Settings(telegram_bot_token="t", telegram_chat_id="1", db_path=db)
+
+    rc = analyze.run_analysis(settings, today=date(2026, 10, 7), dry_run=True)
+
+    assert (rc == 2) is aborts
+
+
+def test_coverage_counts_null_listed_date_and_skips_future_listing(tmp_path):
+    db = tmp_path / "twstock.db"
+    _seed_universe(
+        db, total=3, covered=2,
+        extra_sql=[
+            # listed after expected → not in universe
+            "INSERT INTO stocks (stock_id, name, market, delisted, listed_date) "
+            "VALUES ('NEW1', 'n', 'TWSE', 0, '2026-10-07')",
+            # delisted → not in universe
+            "INSERT INTO stocks (stock_id, name, market, delisted) "
+            "VALUES ('OLD1', 'o', 'TWSE', 1)",
+            # listed earlier with explicit date → in universe, no bar
+            "INSERT INTO stocks (stock_id, name, market, delisted, listed_date) "
+            "VALUES ('MID1', 'm', 'TWSE', 0, '2020-01-02')",
+        ],
+    )
+    # seeded stocks have NULL listed_date and must count as listed
+    assert analyze._fetch_coverage(db, EXPECTED) == (2, 4)
+
+
+def test_coverage_empty_universe_does_not_abort(tmp_path):
+    db = tmp_path / "twstock.db"
+    init_db(db)
+    assert analyze._fetch_coverage(db, EXPECTED) == (0, 0)

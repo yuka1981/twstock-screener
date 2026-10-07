@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,18 @@ class FetchResult:
     rows_inserted: int = 0
     rows_skipped: int = 0
     error: str = ""
+    empty: bool = False
+    rows_floored: int = 0
+
+
+def _fetch_31_requests(today: date) -> int:
+    """HTTP requests twstock's Stock.fetch_31 makes on `today`.
+
+    fetch_31 fetches every month from (today - 60 days) through today's
+    month, one STOCK_DAY request each: usually 3, 2 or 4 near month ends.
+    """
+    before = today - timedelta(days=60)
+    return (today.year - before.year) * 12 + today.month - before.month + 1
 
 
 def fetch_stock_history(
@@ -63,17 +75,29 @@ def fetch_stock_history(
     stock_id: str,
     months: int,
     bucket: TokenBucket,
+    floor: date | None = None,
 ) -> FetchResult:
-    """Fetch last `months` of OHLC for stock_id and upsert into DB."""
+    """Fetch last `months` of OHLC for stock_id and upsert into DB.
+
+    Rows dated before `floor` (an allow-listed purge/adjust action_date) are
+    dropped so the backfill cannot undo a purge.
+    """
     skipped = 0
     try:
-        stock = twstock.Stock(stock_id)
+        # initial_fetch=False: the default constructor already runs fetch_31,
+        # doubling unthrottled requests.
+        stock = twstock.Stock(stock_id, initial_fetch=False)
         rows: list[tuple[Any, ...]] = []
-        bucket.acquire()
+        for _ in range(_fetch_31_requests(date.today())):
+            bucket.acquire()
         data = stock.fetch_31()
         if not data:
+            # twstock turns a non-OK/unparseable reply into [] without raising;
+            # a halted stock is the only legitimate cause.
+            logger.warning("%s: empty fetch", stock_id)
             return FetchResult(
-                stock_id, success=True, rows_inserted=0, rows_skipped=skipped
+                stock_id, success=True, rows_inserted=0, rows_skipped=skipped,
+                empty=True,
             )
         for d in data:
             row = _row_or_none(stock_id, d)
@@ -101,6 +125,14 @@ def fetch_stock_history(
                 logger.warning(
                     "fetch_%d_%d failed for %s: %s", year, month, stock_id, exc
                 )
+        floored = 0
+        if floor is not None:
+            cutoff = floor.isoformat()
+            kept = [r for r in rows if r[1] >= cutoff]
+            floored = len(rows) - len(kept)
+            rows = kept
+        if floored:
+            logger.info("%s: dropped %d rows before floor %s", stock_id, floored, floor)
         con = get_connection(db_path)
         try:
             # Ensure a stub stocks row exists so the FK constraint is satisfied.
@@ -120,7 +152,8 @@ def fetch_stock_history(
         if skipped:
             logger.info("%s: skipped %d rows with None OHLC", stock_id, skipped)
         return FetchResult(
-            stock_id, success=True, rows_inserted=inserted, rows_skipped=skipped
+            stock_id, success=True, rows_inserted=inserted, rows_skipped=skipped,
+            rows_floored=floored,
         )
     except Exception as exc:
         logger.exception("fetch failed for %s", stock_id)

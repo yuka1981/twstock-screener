@@ -19,8 +19,9 @@ LOCK=/home/reidlin/stock/.deploy.lock
 # Daily fetch (03:00, weekdays)
 0  3 * * 1-5 flock -n $LOCK -c 'cd ~/stock && $UV run python scripts/backfill.py --days 5 >> logs/fetch.log 2>&1'
 
-# Daily DB backup to Google Drive (03:30, weekdays)
-30 3 * * 1-5 flock -n $LOCK -c 'cd ~/stock && $UV run python scripts/upload_db_to_drive.py >> logs/drive_backup.log 2>&1'
+# Daily DB backup to Google Drive (07:00, weekdays). After the ~110 min fetch;
+# at 03:30 it collided with fetch's lock and flock -n skipped it every day.
+0  7 * * 1-5 flock -n $LOCK -c 'cd ~/stock && $UV run python scripts/upload_db_to_drive.py >> logs/drive_backup.log 2>&1'
 
 # Daily analyze + Telegram (08:20, weekdays)
 20 8 * * 1-5 flock -n $LOCK -c 'cd ~/stock && $UV run python scripts/analyze.py >> logs/analyze.log 2>&1'

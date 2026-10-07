@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from twstock_screener.audit import (
+    AUDIT_CONFIG_PATH,
     K_HALT_SESSIONS,
     Outlier,
     _evidence,
@@ -21,6 +22,7 @@ from twstock_screener.audit import (
     classify,
     filter_new,
     format_audit_message,
+    load_fetch_floors,
     load_known_outliers,
     run_audit,
     scan_discontinuities,
@@ -223,6 +225,76 @@ def test_load_known_outliers_missing_file_returns_empty(tmp_path: Path):
     """Missing config file is tolerated — audit runs with empty allow-list."""
     cfg = tmp_path / "does_not_exist.toml"
     assert load_known_outliers(cfg) == set()
+
+
+# --- load_fetch_floors -----------------------------------------------------
+
+
+def _floors_cfg(tmp_path: Path) -> Path:
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(textwrap.dedent("""
+        [[outliers]]
+        stock_id = "2321"
+        status = "purged"
+        action_date = "2026-09-21"
+
+        [[outliers]]
+        stock_id = "6669"
+        status = "adjusted"
+        action_date = "2026-09-02"
+
+        [[outliers]]
+        stock_id = "00715L"
+        status = "skip"
+        action_date = "2026-03-09"
+
+        [[outliers]]
+        stock_id = "9999"
+        status = "pending"
+        action_date = "2026-05-01"
+
+        [[outliers]]
+        stock_id = "7780"
+        status = "purged"
+        action_date = "2026-01-19"
+
+        [[outliers]]
+        stock_id = "7780"
+        status = "purged"
+        action_date = "2026-06-01"
+    """))
+    return cfg
+
+
+def test_load_fetch_floors_purged_and_adjusted_only(tmp_path: Path):
+    floors = load_fetch_floors(_floors_cfg(tmp_path))
+    assert floors == {
+        "2321": date(2026, 9, 21),
+        "6669": date(2026, 9, 2),
+        "7780": date(2026, 6, 1),  # later of two entries wins
+    }
+
+
+def test_load_fetch_floors_missing_file_logs_error(tmp_path: Path, caplog):
+    with caplog.at_level("ERROR", logger="twstock_screener.audit"):
+        assert load_fetch_floors(tmp_path / "nope.toml") == {}
+    assert any("nope.toml" in r.getMessage() for r in caplog.records)
+
+
+def test_load_fetch_floors_unknown_status_warns(tmp_path: Path, caplog):
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(
+        '[[outliers]]\nstock_id = "1"\nstatus = "purgd"\naction_date = "2026-01-01"\n'
+    )
+    with caplog.at_level("WARNING", logger="twstock_screener.audit"):
+        assert load_fetch_floors(cfg) == {}
+    assert any("purgd" in r.getMessage() for r in caplog.records)
+
+
+def test_audit_config_path_points_at_repo_config():
+    assert AUDIT_CONFIG_PATH.is_absolute()
+    assert AUDIT_CONFIG_PATH.is_file()
+    assert AUDIT_CONFIG_PATH.name == "audit_known_outliers.toml"
 
 
 # --- filter_new ------------------------------------------------------------

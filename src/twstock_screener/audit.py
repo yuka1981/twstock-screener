@@ -32,6 +32,16 @@ from twstock_screener.pivot import MAX_ADJACENT_RATIO_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
+# Absolute so a run from any cwd finds it (editable install: parents[2] = repo).
+AUDIT_CONFIG_PATH: Path = (
+    Path(__file__).resolve().parents[2] / "config" / "audit_known_outliers.toml"
+)
+
+# Statuses whose pre-event bars were removed or rewritten in the DB; fetch
+# must not insert raw bars before action_date for these stocks.
+_FLOOR_STATUSES = frozenset({"purged", "adjusted"})
+_KNOWN_STATUSES = _FLOOR_STATUSES | {"skip", "pending"}
+
 Kind = Literal["corp_action", "spike", "ambiguous"]
 
 # ≥ 這麼多個「市場有交易但本股缺席」的交易日 → 視為停牌型缺口(公司行動優先桶)。
@@ -191,6 +201,7 @@ def load_known_outliers(config_path: Path) -> set[tuple[str, date]]:
 
     Status values supported (documented at top of config file):
       'purged'  — pre-event bars deleted; entry permanent.
+      'adjusted' — pre-event bars back-adjusted by the action ratio; permanent.
       'skip'    — legitimate market event; auto-expires from lookback.
       'pending' — flagged but undecided; suppresses alerts temporarily.
 
@@ -209,6 +220,37 @@ def load_known_outliers(config_path: Path) -> set[tuple[str, date]]:
             action = date.fromisoformat(action)
         result.add((sid, action))
     return result
+
+
+def load_fetch_floors(config_path: Path) -> dict[str, date]:
+    """Per-stock earliest date fetch may insert, from purged/adjusted entries.
+
+    Without this, the daily backfill's INSERT OR IGNORE re-inserts purged
+    pre-event bars (and raw bars into an adjusted stock's gaps). Several
+    entries for one stock → the latest action_date wins. A missing file
+    fails open ({}), so backfill still runs, but logs at ERROR."""
+    if not config_path.exists():
+        logger.error("allow-list %s missing; fetch floors disabled", config_path)
+        return {}
+    with open(config_path, "rb") as f:
+        data = tomllib.load(f)
+    floors: dict[str, date] = {}
+    for entry in data.get("outliers", []):
+        status = entry.get("status")
+        if status not in _KNOWN_STATUSES:
+            logger.warning(
+                "allow-list entry %s has unknown status %r; no fetch floor",
+                entry.get("stock_id"), status,
+            )
+            continue
+        if status not in _FLOOR_STATUSES:
+            continue
+        action = entry["action_date"]
+        if isinstance(action, str):
+            action = date.fromisoformat(action)
+        sid = entry["stock_id"]
+        floors[sid] = max(action, floors.get(sid, action))
+    return floors
 
 
 def filter_new(

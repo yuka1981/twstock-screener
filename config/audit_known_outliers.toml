@@ -18,8 +18,11 @@
 #   "adjusted" — pre-event OHLC bars back-adjusted by the action ratio
 #               (prices divided, volume multiplied) instead of deleted,
 #               to keep long history. Entry is permanent, like "purged".
-#               fetch uses INSERT OR IGNORE, so adjusted rows are not
-#               overwritten.
+#
+# "purged" and "adjusted" entries also set a fetch floor: backfill never
+# inserts bars dated before action_date for that stock (otherwise its
+# INSERT OR IGNORE re-inserts purged bars that are still in the 31-row
+# window, or raw bars into an adjusted stock's gaps).
 #   "pending" — flagged but action not yet decided. Treated as known for
 #               now (suppresses alerts) but should be reviewed
 #               periodically. If left as "pending" indefinitely, the
