@@ -144,6 +144,26 @@ def _expected_last_trading_day(today: date, db_path: Path) -> date:
     return d
 
 
+def _fetch_coverage(db_path: Path, expected: date) -> tuple[int, int]:
+    """(stocks with a bar on `expected`, active stocks listed by `expected`).
+
+    NULL listed_date (stub rows from fetch) counts as listed.
+    """
+    con = get_connection(db_path)
+    try:
+        row = con.execute(
+            "SELECT COUNT(o.stock_id) AS covered, COUNT(*) AS universe "
+            "FROM stocks s LEFT JOIN ohlc o "
+            "  ON o.stock_id = s.stock_id AND o.date = ? "
+            "WHERE s.market='TWSE' AND s.delisted=0 "
+            "  AND (s.listed_date IS NULL OR s.listed_date <= ?)",
+            (expected.isoformat(), expected.isoformat()),
+        ).fetchone()
+    finally:
+        con.close()
+    return int(row["covered"]), int(row["universe"])
+
+
 def _stock_names(db_path: Path, stock_ids: set[str]) -> dict[str, str]:
     if not stock_ids:
         return {}
@@ -226,6 +246,11 @@ def _resolve_departures(
 # triage block in run_analysis.
 SYSTEMIC_FAILURE_THRESHOLD: int = 25
 
+# Share of active stocks that must have a bar on the expected trading day.
+# Normal days run 98-99.7%; the 2026-09-30 fetch freeze fell to 16%, yet the
+# global MAX(date) stale check passed because a few stocks stayed fresh.
+MIN_FETCH_COVERAGE: float = 0.95
+
 
 def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     """Run daily analysis. dry_run=True is fully read-only (no DB writes)."""
@@ -237,6 +262,11 @@ def run_analysis(settings: Settings, today: date, dry_run: bool = False) -> int:
     if data_date < expected:
         logger.error("data is stale (last %s, expected through %s, today %s)",
                      data_date, expected, today)
+        return 2
+    covered, universe = _fetch_coverage(settings.db_path, expected)
+    if universe and covered / universe < MIN_FETCH_COVERAGE:
+        logger.error("fetch coverage too low: %d/%d stocks have %s (min %.0f%%)",
+                     covered, universe, expected, MIN_FETCH_COVERAGE * 100)
         return 2
 
     raw_candidates: list[Candidate] = []

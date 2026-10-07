@@ -273,3 +273,126 @@ def test_fetch_rows_skipped_preserved_on_exception(tmp_path):
     assert result.rows_skipped == 1, (
         f"expected skipped count to survive exception, got {result.rows_skipped}"
     )
+
+
+# --- floor / request accounting / empty fetch (plan 2026-10-07) -------------
+
+
+def _bars(*days):
+    return [
+        _ohlc_row(date=d, open=10.0, high=11.0, low=9.0, close=10.5,
+                  capacity=1000, turnover=10_000, transaction=10)
+        for d in days
+    ]
+
+
+def test_fetch_floor_drops_pre_floor_rows(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = _bars(
+        date(2026, 9, 17), date(2026, 9, 18), date(2026, 9, 21), date(2026, 9, 22)
+    )
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(
+            db, "2321", months=1, bucket=MagicMock(), floor=date(2026, 9, 21)
+        )
+    assert result.success
+    assert result.rows_floored == 2
+    assert result.rows_inserted == 2
+    con = get_connection(db)
+    try:
+        dates = [r["date"] for r in con.execute(
+            "SELECT date FROM ohlc WHERE stock_id='2321' ORDER BY date")]
+    finally:
+        con.close()
+    assert dates == ["2026-09-21", "2026-09-22"]
+
+
+def test_fetch_without_floor_keeps_all_rows(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = _bars(date(2026, 9, 17), date(2026, 9, 21))
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(db, "2321", months=1, bucket=MagicMock())
+    assert result.rows_inserted == 2
+    assert result.rows_floored == 0
+
+
+def test_fetch_floor_applies_to_multi_month_path(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = _bars(date(2026, 9, 21))
+    fake_stock.fetch.return_value = _bars(date(2026, 8, 3))
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
+        result = fetch_stock_history(
+            db, "2321", months=2, bucket=MagicMock(), floor=date(2026, 9, 21)
+        )
+    assert result.rows_floored == 1
+    assert result.rows_inserted == 1
+
+
+def test_fetch_constructs_stock_without_initial_fetch(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = _bars(date(2026, 9, 21))
+    with patch(
+        "twstock_screener.fetch.twstock.Stock", return_value=fake_stock
+    ) as ctor:
+        fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    ctor.assert_called_once_with("2330", initial_fetch=False)
+
+
+class _PacedStock:
+    """Stand-in for twstock.Stock: fetch_31 issues 3 fetcher.fetch calls,
+    fetch(year, month) one, like the real class."""
+
+    def __init__(self, log: list[str]):
+        self.log = log
+        self.fetcher = SimpleNamespace(fetch=self._http)
+
+    def _http(self, year, month, sid, retry=5):
+        assert retry == 1, "twstock's internal retries would bypass the bucket"
+        self.log.append(f"http {year}-{month:02d}")
+        return {"data": []}
+
+    def fetch_31(self):
+        for m in (8, 9, 10):
+            self.fetcher.fetch(2026, m, "2330")
+        return _bars(date(2026, 9, 21))
+
+    def fetch(self, year, month):
+        return self.fetcher.fetch(year, month, "2330")["data"]
+
+
+def test_fetch_takes_a_token_before_every_http_request(tmp_path):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    log: list[str] = []
+    bucket = MagicMock()
+    bucket.acquire.side_effect = lambda: log.append("token")
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=_PacedStock(log)):
+        fetch_stock_history(db, "2330", months=2, bucket=bucket)
+    # 3 requests from fetch_31 + 1 from the months>1 loop, each paced
+    assert log[:6] == ["token", "http 2026-08", "token", "http 2026-09",
+                       "token", "http 2026-10"]
+    assert log[6] == "token" and log[7].startswith("http ")
+    assert len(log) == 8
+
+
+def test_fetch_empty_result_is_flagged(tmp_path, caplog):
+    db = tmp_path / "fetch.db"
+    init_db(db)
+    fake_stock = MagicMock()
+    fake_stock.fetch_31.return_value = []
+    with (
+        patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock),
+        caplog.at_level("WARNING", logger="twstock_screener.fetch"),
+    ):
+        result = fetch_stock_history(db, "2330", months=1, bucket=MagicMock())
+    assert result.success
+    assert result.empty
+    assert any("empty fetch" in r.getMessage() for r in caplog.records)

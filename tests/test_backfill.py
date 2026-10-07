@@ -43,7 +43,7 @@ def test_backfill_logs_total_skipped(seeded_db, monkeypatch, caplog):
         "BBBB": FetchResult("BBBB", success=True, rows_inserted=15, rows_skipped=3),
     }
 
-    def fake_fetch(db_path, sid, months, bucket):
+    def fake_fetch(db_path, sid, months, bucket, floor=None):
         return fake_results[sid]
 
     monkeypatch.setattr(backfill, "fetch_stock_history", fake_fetch)
@@ -72,7 +72,7 @@ def test_backfill_aggregates_skipped_from_failed_stocks(seeded_db, monkeypatch, 
         ),
     }
 
-    def fake_fetch(db_path, sid, months, bucket):
+    def fake_fetch(db_path, sid, months, bucket, floor=None):
         return fake_results[sid]
 
     monkeypatch.setattr(backfill, "fetch_stock_history", fake_fetch)
@@ -89,3 +89,48 @@ def test_backfill_aggregates_skipped_from_failed_stocks(seeded_db, monkeypatch, 
         f"expected skipped_rows=6 (2 from success + 4 from failure), "
         f"got: {summary_lines[-1]!r}"
     )
+
+
+def test_backfill_passes_allow_list_floor(seeded_db, monkeypatch, tmp_path):
+    """Purged/adjusted stocks get their action_date as fetch floor; others None."""
+    from datetime import date
+
+    backfill = _load_backfill()
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(
+        '[[outliers]]\nstock_id = "AAAA"\nstatus = "purged"\n'
+        'action_date = "2026-09-21"\n'
+    )
+    monkeypatch.setattr(backfill, "AUDIT_CONFIG_PATH", cfg)
+    seen: dict[str, object] = {}
+
+    def fake_fetch(db_path, sid, months, bucket, floor=None):
+        seen[sid] = floor
+        return FetchResult(sid, success=True)
+
+    monkeypatch.setattr(backfill, "fetch_stock_history", fake_fetch)
+    monkeypatch.setattr("sys.argv", ["backfill", "--stocks", "AAAA", "BBBB"])
+
+    assert backfill.main() == 0
+    assert seen == {"AAAA": date(2026, 9, 21), "BBBB": None}
+
+
+def test_backfill_summary_reports_empty_and_floored(seeded_db, monkeypatch, caplog):
+    backfill = _load_backfill()
+    fake_results = {
+        "AAAA": FetchResult("AAAA", success=True, empty=True),
+        "BBBB": FetchResult("BBBB", success=True, rows_inserted=3, rows_floored=4),
+    }
+
+    def fake_fetch(db_path, sid, months, bucket, floor=None):
+        return fake_results[sid]
+
+    monkeypatch.setattr(backfill, "fetch_stock_history", fake_fetch)
+    monkeypatch.setattr("sys.argv", ["backfill", "--stocks", "AAAA", "BBBB"])
+
+    with caplog.at_level(logging.INFO, logger="backfill"):
+        backfill.main()
+
+    summary = [r.getMessage() for r in caplog.records if "done." in r.getMessage()][-1]
+    assert "empty=1" in summary
+    assert "floored_rows=4" in summary

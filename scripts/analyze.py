@@ -18,16 +18,12 @@ import logging
 import sys
 from datetime import date
 
-from pathlib import Path
-
-from twstock_screener.analyze import run_analysis
-from twstock_screener.audit import format_audit_message, run_audit
+from twstock_screener.analyze import _md_escape, run_analysis
+from twstock_screener.audit import AUDIT_CONFIG_PATH, format_audit_message, run_audit
 from twstock_screener.config import Settings
 from twstock_screener.db import finish_run, init_db, start_run
 from twstock_screener.holidays import is_trading_day
 from twstock_screener.notify import send_alert
-
-AUDIT_CONFIG_PATH = Path("config/audit_known_outliers.toml")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +33,29 @@ logging.basicConfig(
 # Suppress to keep secrets out of cron logs.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("analyze")
+
+
+def _alert_failed_run(settings: Settings, today: date, rc: int) -> None:
+    """Tell the chat no report went out; never changes the run's rc."""
+    stale = rc == 2
+    text = (
+        f"⚠️ {today} 未發送報告:"
+        + ("資料過期或覆蓋率不足" if stale else f"analyze 失敗 (rc={rc})")
+        + ",請看 logs/analyze.log"
+    )
+    try:
+        send_alert(
+            settings.db_path,
+            settings.telegram_chat_id,
+            message=_md_escape(text),
+            run_date=today,
+            stock_id="*",
+            pattern="*",
+            transition="data_stale" if stale else "analyze_failed",
+            bot_token=settings.telegram_bot_token.get_secret_value(),
+        )
+    except Exception:
+        logger.exception("failed-run alert not sent")
 
 
 def main() -> int:
@@ -81,6 +100,8 @@ def main() -> int:
                 "audit step failed (continuing — does not affect analyze rc): %s",
                 audit_exc,
             )
+        if rc != 0 and not args.dry_run:
+            _alert_failed_run(settings, today, rc)
         finish_run(
             settings.db_path,
             run_id,

@@ -10,6 +10,7 @@ import math
 import sys
 from datetime import date
 
+from twstock_screener.audit import AUDIT_CONFIG_PATH, load_fetch_floors
 from twstock_screener.circuit_breaker import CircuitBreaker
 from twstock_screener.config import Settings
 from twstock_screener.db import finish_run, get_connection, init_db, start_run
@@ -59,10 +60,13 @@ def main() -> int:
         if args.limit:
             ids = ids[: args.limit]
         logger.info("backfilling %d stocks, %d months each", len(ids), months)
+        floors = load_fetch_floors(AUDIT_CONFIG_PATH)
 
         success = 0
         failed = 0
         total_skipped = 0
+        total_floored = 0
+        empty = 0
         progress = ProgressReporter(total=len(ids), label="backfill", log_every=50)
         try:
             for i, sid in enumerate(ids, start=1):
@@ -81,9 +85,12 @@ def main() -> int:
                     )
                     return 2
                 result = fetch_stock_history(
-                    settings.db_path, sid, months=months, bucket=twse_bucket
+                    settings.db_path, sid, months=months, bucket=twse_bucket,
+                    floor=floors.get(sid),
                 )
                 total_skipped += result.rows_skipped
+                total_floored += result.rows_floored
+                empty += result.empty
                 if result.success:
                     success += 1
                     breaker.record_success()
@@ -101,8 +108,8 @@ def main() -> int:
         finally:
             progress.close()
         logger.info(
-            "done. success=%d fail=%d skipped_rows=%d",
-            success, failed, total_skipped,
+            "done. success=%d fail=%d skipped_rows=%d empty=%d floored_rows=%d",
+            success, failed, total_skipped, empty, total_floored,
         )
         ok = failed < len(ids) * 0.05
         finish_run(
