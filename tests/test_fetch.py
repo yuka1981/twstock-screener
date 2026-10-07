@@ -355,6 +355,7 @@ class _PacedStock:
         self.fetcher = SimpleNamespace(fetch=self._http)
 
     def _http(self, year, month, sid, retry=5):
+        assert retry == 1, "twstock's internal retries would bypass the bucket"
         self.log.append(f"http {year}-{month:02d}")
         return {"data": []}
 

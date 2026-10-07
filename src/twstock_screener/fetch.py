@@ -60,20 +60,23 @@ class FetchResult:
     rows_floored: int = 0
 
 
-
 def _pace(stock: Any, bucket: TokenBucket) -> None:
     """Take a token right before each HTTP request the stock makes.
 
     fetch_31 issues one request per month (2-4); acquiring them all up front
-    would send them back to back. Each Stock has its own fetcher instance.
+    would send them back to back. retry=1 because twstock otherwise re-sends
+    up to 5 times on a non-JSON reply inside one call, bypassing the bucket;
+    a failed month comes back empty and is flagged by the caller. Each Stock
+    has its own fetcher instance, so the wrap does not stack.
     """
     http_fetch = stock.fetcher.fetch
 
     def paced(*args: Any, **kwargs: Any) -> Any:
         bucket.acquire()
-        return http_fetch(*args, **kwargs)
+        return http_fetch(*args, **{**kwargs, "retry": 1})
 
     stock.fetcher.fetch = paced
+
 
 def fetch_stock_history(
     db_path: Path,
