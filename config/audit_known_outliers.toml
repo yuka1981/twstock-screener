@@ -15,6 +15,11 @@
 #               expires when the event_date falls outside the audit
 #               lookback window (DEFAULT_LOOKBACK_DAYS = 60 calendar
 #               days). No manual cleanup needed.
+#   "adjusted" — pre-event OHLC bars back-adjusted by the action ratio
+#               (prices divided, volume multiplied) instead of deleted,
+#               to keep long history. Entry is permanent, like "purged".
+#               fetch uses INSERT OR IGNORE, so adjusted rows are not
+#               overwritten.
 #   "pending" — flagged but action not yet decided. Treated as known for
 #               now (suppresses alerts) but should be reviewed
 #               periodically. If left as "pending" indefinitely, the
@@ -64,3 +69,21 @@ stock_id = "00715L"
 status = "skip"
 action_date = "2026-03-09"
 note = "Legitimate Brent oil 2x leveraged ETF spike (weekend gap + 107M volume + extreme volatility 3 days after); NOT a corporate action. Auto-expired from 60d lookback on 2026-05-08 (entry retained for documentation — future grep recovers the dismissal rationale)."
+
+[[outliers]]
+stock_id = "2321"
+status = "purged"
+action_date = "2026-09-21"
+note = "東訊 45.312174% capital reduction to offset losses (546.87826 new shares per 1000). Halted 2026-09-10~09-18, resumed 2026-09-21 at ref ~27.60 vs pre-halt close 15.1 (1.72x). Pre-2026-09-21 bars (143) purged on cn02 2026-10-07 (backup data/purged-2321-2026-10-07.bak.txt). Sources: cnyes news 6544011, 工商時報 20260902700945."
+
+[[outliers]]
+stock_id = "6550"
+status = "purged"
+action_date = "2026-09-29"
+note = "北極星藥業-KY 48.0498276% capital reduction to offset losses (519.501724 new shares per 1000). Halted 2026-09-17~09-24, new shares listed 2026-09-29 at ref ~19.10 vs pre-halt close 9.92 (1.75x). Pre-2026-09-29 bars (212) purged on cn02 2026-10-07 (backup data/purged-6550-2026-10-07.bak.txt). Sources: cnyes news 6579833, MoneyDJ."
+
+[[outliers]]
+stock_id = "6669"
+status = "adjusted"
+action_date = "2026-09-02"
+note = "緯穎 stock dividend 19.827946 NTD/share (1982.7946 shares per 1000 → 1 share becomes 2.98279), ex-right 2026-09-02, ref price 2615 vs prior close 7800 (2.99x). No halt, so the audit misclassified it as a spike. Pre-2026-09-02 bars (1297) back-adjusted on cn02 2026-10-07: OHLC / 2.98279 (rounded to 0.01), volume x 2.98279, turnover unchanged. Original rows in data/adjusted-6669-2026-10-07.bak.txt. Sources: uanalyze 5525954285, 今周刊 202609020043."
