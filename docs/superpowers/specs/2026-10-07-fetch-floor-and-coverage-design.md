@@ -58,13 +58,12 @@ everything below is TWSE-only.
     new case asserts the floor is passed for an allow-listed stock.
 
 ### Task 2 — real request accounting (contributes to problem 2)
-- `fetch.py`: `twstock.Stock(stock_id, initial_fetch=False)`, then
-  `bucket.acquire()` once per HTTP request `fetch_31` makes. Helper
-  `_fetch_31_requests(today: date) -> int` counts the inclusive months from
-  `today - 60 days` through `today`, the same iteration as twstock's `fetch_31`
-  (`twstock/stock.py:228-240`): 3 on most days, 2 or 4 on a few days a year. Burst of 3
-  matches the bucket capacity of 3. twstock's internal JSON-error retries stay uncounted
-  (out of scope).
+- `fetch.py`: `twstock.Stock(stock_id, initial_fetch=False)`, then wrap the instance's
+  `stock.fetcher.fetch` so every HTTP request (2-4 per `fetch_31`, 1 per extra month)
+  takes a bucket token right before it is sent. (Code review round 1: acquiring all
+  tokens up front sent the requests back to back. Each `Stock` has its own fetcher
+  instance, `twstock/stock.py:201-203`, so the wrap does not stack.) twstock's internal
+  JSON-error retries stay unpaced (out of scope).
 - `fetch.py`: when `fetch_31` returns `[]`, log a WARNING (`empty fetch`) and add
   `FetchResult.empty: bool`; `backfill.py`'s summary line reports `empty=<n>`. Still
   `success=True` (a halted stock legitimately returns `[]` for a month).
@@ -72,10 +71,9 @@ everything below is TWSE-only.
 - `scripts/cn02.crontab`: move the Drive backup (and its comment) from 03:30 to 07:00 (after fetch, before
   08:20 analyze). Fixes problem 3 as well. Deploy note: `deploy.sh` waits `flock -w 300`,
   so a deploy during 03:00-04:50 fails and must be retried; documented in the Risks.
-- Tests: `test_fetch.py` asserts `Stock` is constructed with `initial_fetch=False` and
-  `bucket.acquire` is called `_fetch_31_requests(today)` times per stock;
-  `_fetch_31_requests` returns 3 for 2026-10-07, 2 and 4 for boundary dates found by the
-  same month iteration (e.g. 4 for 2027-03-01); empty fetch sets `empty=True`.
+- Tests: `test_fetch.py` asserts `Stock` is constructed with `initial_fetch=False`, that
+  a token is taken before every fake HTTP request (fetch_31's 3 plus the months>1
+  loop), and that an empty fetch sets `empty=True`.
 
 ### Task 3 — coverage guard (detects problem 2 whatever its cause)
 - `analyze.py` `run_analysis`: after the stale check, one new SQL query (not

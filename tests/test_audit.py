@@ -291,6 +291,23 @@ def test_load_fetch_floors_unknown_status_warns(tmp_path: Path, caplog):
     assert any("purgd" in r.getMessage() for r in caplog.records)
 
 
+def test_load_fetch_floors_normalizes_native_toml_types(tmp_path: Path):
+    """Unquoted TOML values parse as int / datetime; floors must still match
+    string stock ids and compare as dates."""
+    cfg = tmp_path / "known.toml"
+    cfg.write_text(
+        "[[outliers]]\nstock_id = 2321\nstatus = \"purged\"\n"
+        "action_date = 2026-09-21T00:00:00\n"
+        "[[outliers]]\nstock_id = \"6550\"\nstatus = \"purged\"\n"
+        "action_date = 2026-09-29\n"
+    )
+    assert load_fetch_floors(cfg) == {
+        "2321": date(2026, 9, 21),
+        "6550": date(2026, 9, 29),
+    }
+    assert all(type(d) is date for d in load_fetch_floors(cfg).values())
+
+
 def test_audit_config_path_points_at_repo_config():
     assert AUDIT_CONFIG_PATH.is_absolute()
     assert AUDIT_CONFIG_PATH.is_file()

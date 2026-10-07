@@ -23,7 +23,7 @@ import logging
 import sqlite3
 import tomllib
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -248,7 +248,9 @@ def load_fetch_floors(config_path: Path) -> dict[str, date]:
         action = entry["action_date"]
         if isinstance(action, str):
             action = date.fromisoformat(action)
-        sid = entry["stock_id"]
+        elif isinstance(action, datetime):  # unquoted TOML datetime
+            action = action.date()
+        sid = str(entry["stock_id"])  # unquoted TOML id parses as int
         floors[sid] = max(action, floors.get(sid, action))
     return floors
 

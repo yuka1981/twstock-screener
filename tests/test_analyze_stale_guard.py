@@ -84,6 +84,14 @@ EXPECTED = date(2026, 10, 6)  # Tue; today below is Wed 10-07
 def _seed_universe(db, total: int, covered: int, extra_sql: list[str] = ()):
     init_db(db)
     con = get_connection(db)
+    try:
+        _insert_universe(con, total, covered, extra_sql)
+        con.commit()
+    finally:
+        con.close()
+
+
+def _insert_universe(con, total: int, covered: int, extra_sql) -> None:
     for i in range(total):
         sid = f"{1000 + i}"
         con.execute(
@@ -100,8 +108,6 @@ def _seed_universe(db, total: int, covered: int, extra_sql: list[str] = ()):
             )
     for sql in extra_sql:
         con.execute(sql)
-    con.commit()
-    con.close()
 
 
 @pytest.mark.parametrize(("covered", "aborts"), [(94, True), (95, False), (96, False)])

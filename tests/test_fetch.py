@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from twstock_screener.db import get_connection, init_db
-from twstock_screener.fetch import _fetch_31_requests, fetch_stock_history
+from twstock_screener.fetch import fetch_stock_history
 
 
 def _ohlc_row(*, date, open, high, low, close, capacity, turnover, transaction):
@@ -301,8 +301,11 @@ def test_fetch_floor_drops_pre_floor_rows(tmp_path):
     assert result.rows_floored == 2
     assert result.rows_inserted == 2
     con = get_connection(db)
-    dates = [r["date"] for r in con.execute(
-        "SELECT date FROM ohlc WHERE stock_id='2321' ORDER BY date")]
+    try:
+        dates = [r["date"] for r in con.execute(
+            "SELECT date FROM ohlc WHERE stock_id='2321' ORDER BY date")]
+    finally:
+        con.close()
     assert dates == ["2026-09-21", "2026-09-22"]
 
 
@@ -343,27 +346,40 @@ def test_fetch_constructs_stock_without_initial_fetch(tmp_path):
     ctor.assert_called_once_with("2330", initial_fetch=False)
 
 
-def test_fetch_acquires_one_token_per_request(tmp_path):
+class _PacedStock:
+    """Stand-in for twstock.Stock: fetch_31 issues 3 fetcher.fetch calls,
+    fetch(year, month) one, like the real class."""
+
+    def __init__(self, log: list[str]):
+        self.log = log
+        self.fetcher = SimpleNamespace(fetch=self._http)
+
+    def _http(self, year, month, sid, retry=5):
+        self.log.append(f"http {year}-{month:02d}")
+        return {"data": []}
+
+    def fetch_31(self):
+        for m in (8, 9, 10):
+            self.fetcher.fetch(2026, m, "2330")
+        return _bars(date(2026, 9, 21))
+
+    def fetch(self, year, month):
+        return self.fetcher.fetch(year, month, "2330")["data"]
+
+
+def test_fetch_takes_a_token_before_every_http_request(tmp_path):
     db = tmp_path / "fetch.db"
     init_db(db)
-    fake_stock = MagicMock()
-    fake_stock.fetch_31.return_value = _bars(date(2026, 9, 21))
+    log: list[str] = []
     bucket = MagicMock()
-    with patch("twstock_screener.fetch.twstock.Stock", return_value=fake_stock):
-        fetch_stock_history(db, "2330", months=1, bucket=bucket)
-    assert bucket.acquire.call_count == _fetch_31_requests(date.today())
-
-
-@pytest.mark.parametrize(
-    ("today", "expected"),
-    [
-        (date(2026, 10, 7), 3),   # 60d back = 2026-08-08: Aug, Sep, Oct
-        (date(2026, 8, 31), 2),   # 60d back = 2026-07-02: Jul, Aug
-        (date(2027, 3, 1), 4),    # 60d back = 2026-12-31: Dec, Jan, Feb, Mar
-    ],
-)
-def test_fetch_31_requests_matches_twstock_month_span(today, expected):
-    assert _fetch_31_requests(today) == expected
+    bucket.acquire.side_effect = lambda: log.append("token")
+    with patch("twstock_screener.fetch.twstock.Stock", return_value=_PacedStock(log)):
+        fetch_stock_history(db, "2330", months=2, bucket=bucket)
+    # 3 requests from fetch_31 + 1 from the months>1 loop, each paced
+    assert log[:6] == ["token", "http 2026-08", "token", "http 2026-09",
+                       "token", "http 2026-10"]
+    assert log[6] == "token" and log[7].startswith("http ")
+    assert len(log) == 8
 
 
 def test_fetch_empty_result_is_flagged(tmp_path, caplog):

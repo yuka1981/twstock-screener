@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -60,15 +60,20 @@ class FetchResult:
     rows_floored: int = 0
 
 
-def _fetch_31_requests(today: date) -> int:
-    """HTTP requests twstock's Stock.fetch_31 makes on `today`.
 
-    fetch_31 fetches every month from (today - 60 days) through today's
-    month, one STOCK_DAY request each: usually 3, 2 or 4 near month ends.
+def _pace(stock: Any, bucket: TokenBucket) -> None:
+    """Take a token right before each HTTP request the stock makes.
+
+    fetch_31 issues one request per month (2-4); acquiring them all up front
+    would send them back to back. Each Stock has its own fetcher instance.
     """
-    before = today - timedelta(days=60)
-    return (today.year - before.year) * 12 + today.month - before.month + 1
+    http_fetch = stock.fetcher.fetch
 
+    def paced(*args: Any, **kwargs: Any) -> Any:
+        bucket.acquire()
+        return http_fetch(*args, **kwargs)
+
+    stock.fetcher.fetch = paced
 
 def fetch_stock_history(
     db_path: Path,
@@ -87,9 +92,8 @@ def fetch_stock_history(
         # initial_fetch=False: the default constructor already runs fetch_31,
         # doubling unthrottled requests.
         stock = twstock.Stock(stock_id, initial_fetch=False)
+        _pace(stock, bucket)
         rows: list[tuple[Any, ...]] = []
-        for _ in range(_fetch_31_requests(date.today())):
-            bucket.acquire()
         data = stock.fetch_31()
         if not data:
             # twstock turns a non-OK/unparseable reply into [] without raising;
@@ -106,7 +110,6 @@ def fetch_stock_history(
             else:
                 rows.append(row)
         for delta in range(1, months):
-            bucket.acquire()
             today = date.today()
             year = today.year
             month = today.month - delta
